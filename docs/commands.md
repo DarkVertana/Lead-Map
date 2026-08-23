@@ -157,8 +157,11 @@ is spent, the session drops into a commands-only prompt instead of exiting:
 ```
 ✗ Out of free calls for today
   ⎿ today's share is spent · 889 left this month, back tomorrow
-  ⎿ /borrow N takes N more calls from the rest of the month
-  ⎿ commands still work — /borrow, /reset-quota, /quota, /sessions, /help
+
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ › /borrow 40   ·   /switch pro   ·   /reset-quota   ·   /help                │
+╰──────────────────────────────────────────────────────────────────────────────╯
+  commands only — searching resumes the moment there's quota
 
 › /borrow 40
 ✓ Borrowed 40 calls for today

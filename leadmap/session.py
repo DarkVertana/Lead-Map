@@ -1021,10 +1021,9 @@ def ensure_quota(settings: Settings) -> bool:
     else:
         detail(f"today's share is spent · {free.left_month:,} left this month, "
                "back tomorrow")
-        detail("/borrow N takes N more calls from the rest of the month")
-        detail("/switch pro trades phone and website for 5,000 calls a month")
-    detail("commands still work — /switch, /borrow, /reset-quota, /quota, /help")
     console.print()
+    # No list of suggestions here — the prompt below carries them, and this
+    # screen is the first thing you see on a spent day.
     return blocked(settings)
 
 
