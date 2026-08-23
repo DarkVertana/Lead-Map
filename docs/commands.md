@@ -12,6 +12,7 @@ Arguments work too: `/category health`, `/borrow 40`.
 | `/back` | `/b` | change the previous answer |
 | `/category [word]` | `/categories`, `/cat` | the place types Google accepts |
 | `/quota` | `/usage` | what's left of the free tier today |
+| `/switch [plan]` | `/plan` | change which SKU searches bill at |
 | `/borrow N` | — | N more calls today, taken from the month |
 | `/daily-cap [N]` | `/limit` | set today's whole allowance |
 | `/sessions` | `/history` | searches you've already run |
@@ -43,6 +44,59 @@ either opens that group or searches every type and alias:
 ```
 
 This is the command to reach for when a category is rejected.
+
+## /switch — trade fields for a bigger allowance
+
+Google prices a search by the most expensive field in it, so the free allowance isn't a
+setting you can turn up: it's a consequence of what you ask for. `/switch` is that lever.
+
+`/switch` on its own opens a picker — arrow keys, not typing:
+
+```
+⏺ Quota plans · on Text Search Enterprise + Atmosphere
+╭────────────────────────────────────────────────────────────────────────────────────╮
+│   atmosphere     1,000/mo ·    889 left   everything — phone, website, rating, …   │
+│   enterprise     1,000/mo ·  1,000 left   drops the editorial summary, empty on …  │
+│ ❯ pro            5,000/mo ·  5,000 left   drops phone, website, rating, reviews, … │
+│   essentials    10,000/mo · 10,000 left   drops the business name too — ids, …     │
+│   ids           unlimited                 place ids only, for counting or …        │
+╰────────────────────────────────────────────────────────────────────────────────────╯
+  ↑↓ to move   ·   enter to switch   ·   esc to keep this plan
+```
+
+`↑`/`↓` (or `tab`, or `ctrl+n`/`ctrl+p`) move, `enter` switches, `esc` leaves the plan
+alone. `/switch pro` still works if you'd rather say it outright.
+
+```
+› /switch pro
+✓ Now billing as Text Search Pro
+  ⎿ free tier  5,000 a month (was 1,000)  ·  4,925 left  ·  540 today
+  ⎿ giving up  nationalPhoneNumber, internationalPhoneNumber, websiteUri, rating …
+  ⎿ those columns come back empty — the file still has all 33
+  ⎿ each SKU has its own allowance — pro usage is counted separately from the rest
+```
+
+| Plan | Free / month | What you keep | What you lose |
+|---|---|---|---|
+| `atmosphere` *(default)* | 1,000 | everything | — |
+| `enterprise` | 1,000 | everything useful | `summary` (empty on most small businesses anyway) |
+| `pro` | **5,000** | name, address, type, coordinates, status, hours-free fields | phone, website, rating, reviews, price |
+| `essentials` | **10,000** | ids, addresses, coordinates, types | the business name as well |
+| `ids` | **unlimited** | place ids | everything else |
+
+Aliases: `full`, `contact`, `basic`, `minimal`, `ids-only`, `free`.
+
+**When it's worth it.** `pro` is the interesting one: five times the allowance, and you
+still get name, address and coordinates. Use it to map coverage — *how many gyms are in
+this district, and where* — then switch back to `atmosphere` and re-run the shortlist to
+collect phone numbers. Two searches on two allowances beat one search that runs out.
+
+**Each SKU is metered separately**, by Google and by LeadMap. Using up your 1,000
+Atmosphere calls doesn't touch the 5,000 Pro ones — which is why `/switch pro` is
+sometimes the answer to *"out of free calls for today"*.
+
+The columns you gave up still exist in the output file; they're simply empty. From the
+CLI it's `--plan pro`, and `LEADMAP_PLAN=pro` in `.env` makes it the default.
 
 ## /quota — what's left
 

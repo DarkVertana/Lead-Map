@@ -14,8 +14,8 @@ from rich.text import Text
 
 from . import history, quota
 from .config import Settings
-from .constants import (COLUMNS, ENV_KEYS, MAX_PAGES, MAX_RADIUS_M, MIN_TILE_RADIUS, PAGE_SIZE,
-                        SATURATED, SEARCH_SKU)
+from .constants import (COLUMNS, ENV_KEYS, MAX_PAGES, MAX_RADIUS_M, MIN_TILE_RADIUS,
+                        PAGE_SIZE, SATURATED, mask_for, sku_for_plan)
 from .errors import PlacesError
 from .export import output_path_for, write_dataframe
 from .geometry import Tile, build_tiles, split_tile
@@ -71,14 +71,16 @@ def run(settings: Settings) -> int:
         for note in verdict.notes:
             report.note(note, mark="·", style="muted")
 
+    field_mask = mask_for(settings.plan)          # the plan decides both of these
+    search_sku = sku_for_plan(settings.plan)
     ledger = quota.Quota(daily_cap=settings.daily_cap,
                          monthly_cap=settings.monthly_cap)
-    search_left = ledger.left_today(SEARCH_SKU)
+    search_left = ledger.left_today(search_sku)
     if search_left <= 0:
-        status = ledger.status(SEARCH_SKU)
+        status = ledger.status(search_sku)
         if status.left_month <= 0:
             raise PlacesError(
-                f"the {SEARCH_SKU.free_per_month:,} free {SEARCH_SKU.label} calls for "
+                f"the {search_sku.free_per_month:,} free {search_sku.label} calls for "
                 f"{ledger.month_name()} are gone — they come back on "
                 f"{quota.human_date(ledger.next_month())}")
         raise PlacesError(
@@ -86,7 +88,8 @@ def run(settings: Settings) -> int:
             f"{status.left_month:,} left this month, back tomorrow. "
             "Use --daily-cap N to borrow from the rest of the month.")
 
-    client = PlacesClient(settings.api_key, budget=ledger)
+    client = PlacesClient(settings.api_key, budget=ledger,
+                          field_mask=field_mask, sku=search_sku)
     output_path = output_path_for(settings)
     if output_path.suffix.lower() not in (".csv", ".xlsx", ".xls", ".pdf", ".json"):
         report.note(f"{output_path.suffix} isn't a format I write — "
@@ -158,8 +161,8 @@ def run(settings: Settings) -> int:
     report.detail("api key", Text(f"{mask_key(settings.api_key)} · from "
                                   f"{settings.api_key_source}", style="muted"))
     free = Text(f"{search_left:,} calls left today", style="value")
-    free.append(f"  ·  {ledger.status(SEARCH_SKU).left_month:,} of "
-                f"{SEARCH_SKU.free_per_month:,} this month  ·  {SEARCH_SKU.label}",
+    free.append(f"  ·  {ledger.status(search_sku).left_month:,} of "
+                f"{search_sku.free_per_month:,} this month  ·  {search_sku.label}",
                 style="muted")
     report.detail("free tier", free)
     report.print()
@@ -301,7 +304,7 @@ def run(settings: Settings) -> int:
                         na_position="last").reset_index(drop=True)
     fmt = write_dataframe(df, output_path, title=query, pdf_all=settings.pdf_all)
 
-    remaining = ledger.status(SEARCH_SKU)
+    remaining = ledger.status(search_sku)
     extra = [("tiles swept", str(done)), ("api requests", str(client.requests)),
              ("free tier", f"{remaining.left_today:,} left today · "
                            f"{remaining.left_month:,} this month")]

@@ -39,7 +39,8 @@ from rich.text import Text
 
 from . import export, history, quota, search
 from .config import Settings
-from .constants import APP_TITLE, ENV_KEYS, SEARCH_SKU, VERSION
+from .constants import (APP_TITLE, ENV_KEYS, PLAN_NOTES, VERSION, dropped_by,
+                        plan_name, sku_for_plan)
 from .errors import PlacesError
 from .ui.banner import banner
 from .ui.report import mask_key, progress_bar, short_path
@@ -79,6 +80,9 @@ _PROMPT_STYLE = Style.from_dict({
     "placeholder": "#6c6c6c",
     "hint": "#6c6c6c",
     "note": "#e08c48",
+    "choice": "",
+    "choice.on": "#e08c48 bold",
+    "choice.mark": "#e08c48 bold",
 })
 
 _HISTORIES: dict[str, InMemoryHistory] = {}
@@ -204,6 +208,77 @@ def read_line(*, key: str = "", placeholder: str = "", hint: str = "") -> str:
         return app.run()
     except EOFError:                    # the terminal went away under us
         raise Cancelled("input closed") from None
+
+
+def choose(rows: list[tuple[str, str]], *, current: int = 0,
+           hint: str = "") -> Optional[int]:
+    """Pick one row with the arrow keys. Returns its index, or None if cancelled.
+
+    Same frame as the input box, because it is the same kind of moment: the tool
+    is asking, and the answer is one keystroke away.
+    """
+    if not sys.stdin.isatty() or not rows:
+        return None
+    state = {"index": max(0, min(current, len(rows) - 1))}
+
+    def render():
+        try:
+            columns = get_app().output.get_size().columns
+        except Exception:                                       # noqa: BLE001
+            columns = 80
+        width = max(20, columns - 6)
+        out = []
+        for index, (label, note) in enumerate(rows):
+            selected = index == state["index"]
+            line = f"{label:<12} {note}"[:width]
+            out.append(("class:choice.mark" if selected else "class:choice",
+                        "❯ " if selected else "  "))
+            out.append(("class:choice.on" if selected else "class:choice",
+                        line.ljust(width) + "\n"))
+        out[-1] = (out[-1][0], out[-1][1].rstrip("\n"))
+        return out
+
+    body = VSplit([
+        Window(char="│", width=1, style="class:frame"),
+        Window(width=1),
+        Window(FormattedTextControl(render), height=len(rows)),
+        Window(width=1),
+        Window(char="│", width=1, style="class:frame"),
+        Window(width=1),
+    ], height=len(rows))
+
+    keys = KeyBindings()
+
+    @keys.add("up")
+    @keys.add("c-p")
+    def _up(event) -> None:
+        state["index"] = (state["index"] - 1) % len(rows)
+
+    @keys.add("down")
+    @keys.add("c-n")
+    @keys.add("tab")
+    def _down(event) -> None:
+        state["index"] = (state["index"] + 1) % len(rows)
+
+    @keys.add("enter")
+    def _pick(event) -> None:
+        event.app.exit(result=state["index"])
+
+    @keys.add("escape", eager=True)
+    @keys.add("c-c")
+    @keys.add("c-d")
+    def _cancel(event) -> None:
+        event.app.exit(result=None)
+
+    rows_ui = [_rule("╭", "╮"), body, _rule("╰", "╯")]
+    if hint:
+        rows_ui.append(Window(FormattedTextControl(
+            lambda: [("class:hint", f"  {hint}")]), height=1))
+
+    app: Application = Application(
+        layout=Layout(HSplit(rows_ui)), key_bindings=keys, style=_PROMPT_STYLE,
+        full_screen=False, erase_when_done=True, mouse_support=False)
+    return app.run()
 
 
 # ---------------------------------------------------------------------------
@@ -363,7 +438,9 @@ def _cmd_version(args: str, settings: Settings) -> None:
     step(f"{APP_TITLE} {VERSION}")
     field("python", platform.python_version(), style="muted")
     field("installed", short_path(Path(__file__).resolve().parent), style="muted")
-    field("billed as", f"{SEARCH_SKU.label}  ·  {SEARCH_SKU.free_per_month:,} free/month",
+    sku = sku_for_plan(settings.plan)
+    field("billed as", f"{sku.label}  ·  {sku.free_per_month:,} free/month"
+                       if sku.free_per_month else f"{sku.label}  ·  unmetered",
           style="muted")
     field("place types", f"{len(place_types.ALL)} categories · "
                          f"{len(place_types.TABLE_B)} not filterable",
@@ -373,7 +450,7 @@ def _cmd_version(args: str, settings: Settings) -> None:
 
 def _cmd_quota(args: str, settings: Settings) -> None:
     ledger = quota.Quota(daily_cap=settings.daily_cap, monthly_cap=settings.monthly_cap)
-    free_tier_panel(ledger)
+    free_tier_panel(ledger, settings)
     geo = ledger.status(quota.GEOCODING)
     field("geocoding", f"{geo.used_month:,} of {geo.sku.free_per_month:,} used "
                        f"this month", style="muted")
@@ -383,7 +460,7 @@ def _cmd_quota(args: str, settings: Settings) -> None:
 def _cmd_daily_cap(args: str, settings: Settings) -> None:
     """Borrow from the rest of the month instead of pretending today was free."""
     ledger = quota.Quota(daily_cap=settings.daily_cap, monthly_cap=settings.monthly_cap)
-    status = ledger.status(SEARCH_SKU)
+    status = ledger.status(sku_for_plan(settings.plan))
     if not args.strip():
         step("Today's cap")
         field("allowance", f"{status.allowance_today:,} calls"
@@ -408,7 +485,7 @@ def _cmd_daily_cap(args: str, settings: Settings) -> None:
 
     settings.daily_cap = wanted
     fresh = quota.Quota(daily_cap=wanted, monthly_cap=settings.monthly_cap)
-    now = fresh.status(SEARCH_SKU)
+    now = fresh.status(sku_for_plan(settings.plan))
     step(f"Today's cap is now {wanted:,}", mark="✓", style="ok")
     field("left today", f"{now.left_today:,} calls"
                         + ("" if now.left_today else " — the month is what's short here"))
@@ -420,7 +497,7 @@ def _cmd_daily_cap(args: str, settings: Settings) -> None:
 def _cmd_borrow(args: str, settings: Settings) -> None:
     """`/borrow 40` — forty more calls today, out of the month's remainder."""
     ledger = quota.Quota(daily_cap=settings.daily_cap, monthly_cap=settings.monthly_cap)
-    status = ledger.status(SEARCH_SKU)
+    status = ledger.status(sku_for_plan(settings.plan))
     try:
         extra = int(args.split()[0])
     except (IndexError, ValueError):
@@ -442,12 +519,103 @@ def _cmd_borrow(args: str, settings: Settings) -> None:
 
     settings.daily_cap = status.used_today + extra
     now = quota.Quota(daily_cap=settings.daily_cap,
-                      monthly_cap=settings.monthly_cap).status(SEARCH_SKU)
+                      monthly_cap=settings.monthly_cap).status(sku_for_plan(settings.plan))
     step(f"Borrowed {extra:,} calls for today", mark="✓", style="ok")
     field("left today", f"{now.left_today:,}")
     field("left this month", f"{now.left_month:,} of {now.sku.free_per_month:,}")
     detail("taken from the rest of the month — the monthly free tier still holds")
     console.print()
+
+
+def _plan_rows(ledger: quota.Quota) -> list[tuple[str, str, str]]:
+    """(plan, label, note) for every plan, richest first."""
+    rows = []
+    for plan in reversed(quota.TIER_ORDER):
+        sku = sku_for_plan(plan)
+        if sku.free_per_month == 0:
+            allowance = f"{'unlimited':>10}              "
+        else:
+            left = ledger.status(sku)
+            allowance = f"{sku.free_per_month:>7,}/mo · {left.left_month:>6,} left"
+        rows.append((plan, plan, f"{allowance}   {PLAN_NOTES[plan]}"))
+    return rows
+
+
+def _apply_plan(settings: Settings, wanted: str, ledger: quota.Quota) -> None:
+    """Move to a plan and say what that costs and buys."""
+    was = sku_for_plan(settings.plan)
+    settings.plan = wanted
+    sku = sku_for_plan(wanted)
+    status = ledger.status(sku)
+    step(f"Now billing as {sku.label}", mark="✓", style="ok")
+    if sku.free_per_month == 0:
+        field("free tier", "unlimited — this SKU is not metered")
+    else:
+        previous = "unlimited" if was.free_per_month == 0 else f"{was.free_per_month:,}"
+        field("free tier", f"{sku.free_per_month:,} a month (was {previous})  ·  "
+                           f"{status.left_month:,} left  ·  "
+                           f"{status.left_today:,} today")
+    given_up = dropped_by(wanted)
+    if given_up:
+        field("giving up", ", ".join(given_up[:8])
+                           + (f" … {len(given_up) - 8} more" if len(given_up) > 8 else ""),
+              style="warn")
+        detail("those columns come back empty — the file still has all 33")
+    detail(f"each SKU has its own allowance — {wanted} usage is counted separately "
+           "from the rest")
+    console.print()
+
+
+def _cmd_switch(args: str, settings: Settings) -> None:
+    """Change which SKU searches bill at, by asking Google for fewer fields.
+
+    Google prices a search by the most expensive field in it, so a bigger
+    allowance is not a setting you can turn up — it is a consequence of asking
+    for less. Giving up fields is the only lever, and this is it.
+    """
+    ledger = quota.Quota(daily_cap=settings.daily_cap, monthly_cap=settings.monthly_cap)
+    current = plan_name(settings.plan)
+    rows = _plan_rows(ledger)
+
+    if args.strip():                       # /switch pro — no need to pick
+        try:
+            wanted = plan_name(args)
+        except ValueError as exc:
+            detail(f"✗ {exc}", style="bad")
+            console.print()
+            return
+        if wanted == current:
+            detail(f"already on {sku_for_plan(wanted).label}", style="muted")
+            console.print()
+            return
+        _apply_plan(settings, wanted, ledger)
+        return
+
+    step(f"Quota plans · on {sku_for_plan(current).label}")
+    console.print()
+    picked = choose([(label, note) for _, label, note in rows],
+                    current=[plan for plan, _, _ in rows].index(current),
+                    hint="↑↓ to move   ·   enter to switch   ·   esc to keep this plan")
+
+    if picked is None:                     # no terminal, or they backed out
+        if not sys.stdin.isatty():
+            for plan, label, note in rows:
+                field(label, note + ("  ← current" if plan == current else ""),
+                      style="value" if plan == current else "muted", width=12)
+            detail("/switch <plan> changes it")
+        else:
+            answered("", empty="keeping " + sku_for_plan(current).label)
+        console.print()
+        return
+
+    wanted = rows[picked][0]
+    answered(wanted, blank=False)
+    console.print()
+    if wanted == current:
+        detail(f"already on {sku_for_plan(wanted).label}", style="muted")
+        console.print()
+        return
+    _apply_plan(settings, wanted, ledger)
 
 
 def _cmd_reset_quota(args: str, settings: Settings) -> None:
@@ -584,6 +752,8 @@ COMMANDS: list[Command] = [
     Command(("category", "categories", "cat"), "[word]",
             "the place types Google accepts", _cmd_category),
     Command(("quota", "usage"), "", "what's left of the free tier today", _cmd_quota),
+    Command(("switch", "plan"), "[plan]", "change which SKU searches bill at",
+            _cmd_switch),
     Command(("borrow",), "N", "N more calls today, taken from the month",
             _cmd_borrow),
     Command(("daily-cap", "limit"), "[N]", "set today's whole allowance",
@@ -700,9 +870,9 @@ def day_strip(ledger: quota.Quota, sku: quota.Sku, days: int = 7) -> str:
     return "   ".join(parts)
 
 
-def free_tier_panel(ledger: quota.Quota) -> None:
+def free_tier_panel(ledger: quota.Quota, settings: Settings) -> None:
     """The three-line free-tier readout, at startup and on /quota."""
-    free = ledger.status(SEARCH_SKU)
+    free = ledger.status(sku_for_plan(settings.plan))
     step(f"Free tier · {free.sku.label}")
     field("this month", f"{free.used_month:,} of {free.sku.free_per_month:,} used  ·  "
                         f"{free.left_month:,} left  ·  resets "
@@ -726,8 +896,9 @@ def plan(settings: Settings) -> None:
         field("coverage", "everything in the area", style="value")
     field("output", short_path(export.output_path_for(settings)), style="path")
     left = quota.Quota(daily_cap=settings.daily_cap,
-                       monthly_cap=settings.monthly_cap).status(SEARCH_SKU)
-    field("free tier", f"{left.left_today:,} calls left today", style="muted")
+                       monthly_cap=settings.monthly_cap).status(sku_for_plan(settings.plan))
+    field("free tier", f"{left.left_today:,} calls left today  ·  "
+                       f"{left.sku.label}", style="muted")
     console.print()
 
 
@@ -808,7 +979,7 @@ def blocked(settings: Settings) -> bool:
     while True:
         answer = read_line(
             key="__blocked__",
-            placeholder="/borrow 40   ·   /reset-quota   ·   /quota   ·   /help",
+            placeholder="/borrow 40   ·   /switch pro   ·   /reset-quota   ·   /help",
             hint="commands only — searching resumes the moment there's quota   ·   "
                  "ctrl+c twice to quit")
         answer = answer.strip()
@@ -827,7 +998,8 @@ def blocked(settings: Settings) -> bool:
             continue
 
         left = quota.Quota(daily_cap=settings.daily_cap,
-                           monthly_cap=settings.monthly_cap).left_today(SEARCH_SKU)
+                           monthly_cap=settings.monthly_cap).left_today(
+                               sku_for_plan(settings.plan))
         if left > 0:
             step(f"{left:,} calls available — carrying on", mark="✓", style="ok")
             console.print()
@@ -837,7 +1009,7 @@ def blocked(settings: Settings) -> bool:
 def ensure_quota(settings: Settings) -> bool:
     """True when a search can run — after talking it over, if need be."""
     ledger = quota.Quota(daily_cap=settings.daily_cap, monthly_cap=settings.monthly_cap)
-    free = ledger.status(SEARCH_SKU)
+    free = ledger.status(sku_for_plan(settings.plan))
     if free.left_today > 0:
         return True
 
@@ -850,7 +1022,8 @@ def ensure_quota(settings: Settings) -> bool:
         detail(f"today's share is spent · {free.left_month:,} left this month, "
                "back tomorrow")
         detail("/borrow N takes N more calls from the rest of the month")
-    detail("commands still work — /borrow, /reset-quota, /quota, /sessions, /help")
+        detail("/switch pro trades phone and website for 5,000 calls a month")
+    detail("commands still work — /switch, /borrow, /reset-quota, /quota, /help")
     console.print()
     return blocked(settings)
 
@@ -872,7 +1045,7 @@ def run_session(settings: Settings) -> int:
 
     ledger = quota.Quota(daily_cap=settings.daily_cap,
                          monthly_cap=settings.monthly_cap)
-    free_tier_panel(ledger)
+    free_tier_panel(ledger, settings)
     console.print()
 
     step("Ready")

@@ -143,6 +143,17 @@ than spending, and the loop stops instead of hammering a wall.
 `--quiet` silences everything but errors. The dated output folder keeps each night's
 file separate, so nothing is overwritten.
 
+**Map coverage cheaply, then enrich**
+
+```bash
+leadmap --plan pro -l "Nashik, India" -c gym -o gyms_survey.csv --max-tiles 40
+leadmap -l "Nashik, India" -n "Gold's Gym" -o golds.csv        # full plan, phone + website
+```
+
+`--plan pro` bills against a separate 5,000-a-month allowance instead of the 1,000 one,
+at the cost of the phone, website and rating columns. Good for answering *how many, and
+where* before spending the expensive allowance on the shortlist.
+
 **Convert what you already have**
 
 ```bash

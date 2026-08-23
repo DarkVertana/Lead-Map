@@ -183,6 +183,7 @@ have to say, and hand the question straight back — nothing is lost.
 | `/back` | `/b` | change the previous answer |
 | `/category [word]` | `/cat` | the 478 place types Google accepts — by group, or searched |
 | `/quota` | `/usage` | what's left today and this month, day by day |
+| `/switch [plan]` | `/plan` | pick a billing SKU from a list — 1,000/mo up to unlimited |
 | `/borrow N` | | N more calls today, taken from the month's remainder |
 | `/daily-cap [N]` | `/limit` | set today's whole allowance |
 | `/sessions` | `/history` | the searches you've already run: rows, calls, files |
@@ -579,6 +580,7 @@ You need a location, an output file, and at least one of `--name` / `--category`
 | `--type` | Restrict to a Places type id (`restaurant`, `dentist`, `gym`, …) — must be Table A |
 | `--min-rating` / `--open-now` | Server-side filters |
 | `--name-match` | With `--name`: keep only results whose name contains it |
+| `--plan NAME` | Which SKU to bill at: `atmosphere` (default), `enterprise`, `pro`, `essentials`, `ids` — fewer fields, bigger free allowance |
 | `--no-verify` | Skip the offline checks on the location and category |
 | `--with-website-only` / `--operational-only` | Local filters |
 | `--language` / `--region` | e.g. `en` / `us` |

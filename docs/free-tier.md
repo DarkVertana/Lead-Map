@@ -43,6 +43,14 @@ Which is not a trade worth making for a lead tool — phone and website *are* th
 empty every time — 0 of 121 rows on a real Nashik run. Same 1,000 free either way, so it
 costs nothing today; drop it from `FIELD_MASK` and you'd save 12.5% if you ever go paid.
 
+## Switching plans
+
+You are not stuck on 1,000. `/switch pro` (or `--plan pro`) asks Google for fewer fields
+and moves you to a **separate 5,000-a-month allowance**; `essentials` is 10,000 and `ids`
+is unmetered. You lose the columns those fields fill — phone and website at `pro` — but
+the allowances don't share a pot, so a Pro sweep costs nothing from your Atmosphere
+budget. See [/switch](commands.md#switch--trade-fields-for-a-bigger-allowance).
+
 ## The month, split across its days
 
 Today's share is **what's left of the month divided by the days remaining in it**. Unused

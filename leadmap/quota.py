@@ -106,6 +106,21 @@ FIELD_TIERS = {
 ID_ONLY = {"id", "name", "nextPageToken", "attributions"}
 
 
+def tier_of(field: str) -> str:
+    """Which SKU tier one place field belongs to."""
+    name = field.strip().split(".")[-1]
+    if name in ID_ONLY:
+        return "ids"
+    for tier in ("atmosphere", "enterprise", "pro"):
+        if name in FIELD_TIERS[tier]:
+            return tier
+    return "essentials"
+
+
+def sku_for_tier(tier: str) -> Sku:
+    return TEXT_SEARCH[tier]
+
+
 def sku_for_mask(field_mask: str) -> Sku:
     """The SKU a request with this field mask bills at: the highest tier in it."""
     fields = [f.strip().split(".")[-1] for f in field_mask.split(",") if f.strip()]
@@ -334,7 +349,13 @@ def main(argv: list[str]) -> int:
           f"  ({search.free_per_month:,} free/month, then ${search.price_per_1000:.0f}/1k)")
     print()
     quota_month = quota.month_name()
-    for sku in (search, GEOCODING):
+    # every SKU with usage this month, plus the one we'd bill at right now:
+    # switching plans moves you between separate allowances, not one shared pot.
+    skus = [search] + [sku for sku in list(TEXT_SEARCH.values()) + [GEOCODING]
+                       if sku.key != search.key and quota.used_in_month(sku)]
+    if GEOCODING not in skus:
+        skus.append(GEOCODING)
+    for sku in skus:
         status = quota.status(sku)
         print(f"  {sku.label}")
         print(f"    {'today':<9}{status.used_today:>6,} used   "

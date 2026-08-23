@@ -55,6 +55,59 @@ FIELD_MASK = ",".join([FIELD_MASK, *EXTRA_FIELDS])
 # mask and both the price and the free allowance follow — see quota.py.
 SEARCH_SKU = quota.sku_for_mask(FIELD_MASK)
 
+# ---------------------------------------------------------------------------
+# Plans
+# ---------------------------------------------------------------------------
+# Google prices a search by the most expensive field you ask for, so asking for
+# less is the only way to a bigger free allowance. A plan is exactly that: the
+# tier to stop at. Everything above it is dropped from the mask, those columns
+# come back empty, and the monthly allowance changes to match.
+
+DEFAULT_PLAN = "atmosphere"
+
+PLAN_ALIASES = {
+    "full": "atmosphere", "everything": "atmosphere", "max": "atmosphere",
+    "contact": "enterprise", "leads": "enterprise",
+    "basic": "pro", "names": "pro",
+    "minimal": "essentials", "addresses": "essentials",
+    "ids-only": "ids", "free": "ids", "count": "ids",
+}
+PLAN_NOTES = {
+    "atmosphere": "everything — phone, website, rating, hours, editorial summary",
+    "enterprise": "drops the editorial summary, which is empty on most small businesses",
+    "pro": "drops phone, website, rating, reviews, price and hours",
+    "essentials": "drops the business name too — ids, addresses, coordinates, types",
+    "ids": "place ids only, for counting or enriching later",
+}
+
+
+def plan_name(plan: str) -> str:
+    """'full' → 'atmosphere'. Unknown names raise, so a typo can't silently bill."""
+    wanted = (plan or DEFAULT_PLAN).strip().lower().replace("_", "-")
+    resolved = PLAN_ALIASES.get(wanted, wanted)
+    if resolved not in quota.TIER_ORDER:
+        raise ValueError(f"unknown plan {plan!r} — "
+                         f"try {', '.join(reversed(quota.TIER_ORDER))}")
+    return resolved
+
+
+def mask_for(plan: str) -> str:
+    """The field mask a plan is allowed to ask for."""
+    ceiling = quota.TIER_ORDER.index(plan_name(plan))
+    return ",".join(field for field in FIELD_MASK.split(",")
+                    if quota.TIER_ORDER.index(quota.tier_of(field)) <= ceiling)
+
+
+def dropped_by(plan: str) -> list[str]:
+    """The fields a plan gives up, in the order the mask lists them."""
+    ceiling = quota.TIER_ORDER.index(plan_name(plan))
+    return [field.split(".")[-1] for field in FIELD_MASK.split(",")
+            if quota.TIER_ORDER.index(quota.tier_of(field)) > ceiling]
+
+
+def sku_for_plan(plan: str) -> "quota.Sku":
+    return quota.sku_for_tier(plan_name(plan))
+
 # The spreadsheet, in reading order: who they are, how to reach them, where they
 # are (broken up), then everything else Google knows.
 COLUMNS = [

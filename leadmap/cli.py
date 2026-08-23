@@ -12,7 +12,8 @@ from rich.text import Text
 
 from . import quota
 from .config import Settings, apply_env_defaults, collect_inputs, load_environment
-from .constants import APP_TITLE, DEFAULT_TILE_BUDGET, VERSION
+from .constants import (APP_TITLE, DEFAULT_PLAN, DEFAULT_TILE_BUDGET, VERSION,
+                        plan_name)
 from .errors import PlacesError
 from .export import convert_file, read_dataframe
 from .search import run
@@ -91,6 +92,9 @@ def main(
     open_now: Annotated[bool, typer.Option("--open-now", help="Only places open right now.")] = False,
     name_match: Annotated[bool, typer.Option(
         "--name-match", help="With --name: keep only results whose name contains it.")] = False,
+    plan: Annotated[str, typer.Option(
+        "--plan", help="Which SKU to bill at: atmosphere, enterprise, pro, essentials, "
+                       "ids. Fewer fields, bigger free allowance.")] = DEFAULT_PLAN,
     verify: Annotated[bool, typer.Option(
         "--verify/--no-verify", "--verify-location/--no-verify-location",
         help="Check the location and category against the offline data first.")] = True,
@@ -160,7 +164,7 @@ def main(
     settings = Settings(
         location=location or "", name=name or "", category=category or "",
         output=output or "", api_key=api_key or "", radius=radius, grid=grid,
-        max_results=max_results, max_tiles=max_tiles, daily_cap=daily_cap,
+        plan=plan, max_results=max_results, max_tiles=max_tiles, daily_cap=daily_cap,
         monthly_cap=monthly_cap, included_type=type_,
         language=language, region=region,
         min_rating=min_rating, open_now=open_now, name_match=name_match,
@@ -172,6 +176,10 @@ def main(
     try:
         if grid < 1:
             raise PlacesError("--grid must be >= 1.")
+        try:
+            settings.plan = plan_name(settings.plan)  # a typo here would misbill
+        except ValueError as exc:
+            raise PlacesError(str(exc)) from None
         settings.env_path, from_file = load_environment(env_file)
         apply_env_defaults(settings, from_file)
         if wants_session:

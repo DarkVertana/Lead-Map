@@ -19,11 +19,14 @@ from .geometry import Tile, haversine
 class PlacesClient:
     """Thin wrapper over the Places (New) + Geocoding endpoints."""
 
-    def __init__(self, api_key: str, timeout: int = 30, budget=None):
+    def __init__(self, api_key: str, timeout: int = 30, budget=None,
+                 field_mask: str = FIELD_MASK, sku=SEARCH_SKU):
         self.api_key = api_key
         self.timeout = timeout
         self.requests = 0           # billed calls, so the run can report them
         self.budget = budget        # a quota.Quota, or None to count nothing
+        self.field_mask = field_mask    # the plan decides how much we ask for
+        self.sku = sku                  # and therefore what it bills at
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": f"places-scraper/{VERSION}"})
 
@@ -100,7 +103,8 @@ class PlacesClient:
                     min_rating: float | None = None,
                     on_warn=None) -> list[dict[str, Any]]:
         """One text search, following pagination up to the API's 3-page cap."""
-        headers = {"X-Goog-Api-Key": self.api_key, "X-Goog-FieldMask": FIELD_MASK}
+        headers = {"X-Goog-Api-Key": self.api_key,
+                   "X-Goog-FieldMask": self.field_mask}
         body: dict[str, Any] = {
             "textQuery": query,
             "pageSize": PAGE_SIZE,
@@ -126,19 +130,20 @@ class PlacesClient:
             if token:
                 body["pageToken"] = token
             try:
-                data = self._request("POST", PLACES_SEARCH_URL, sku=SEARCH_SKU,
+                data = self._request("POST", PLACES_SEARCH_URL, sku=self.sku,
                                      json=body, headers=headers)
             except PlacesError as exc:
                 # Nor should a field Google has renamed: drop the optional ones
                 # and ask again with the mask we know it accepts.
-                if (headers["X-Goog-FieldMask"] != CORE_FIELD_MASK
-                        and "field" in str(exc).lower()):
-                    headers["X-Goog-FieldMask"] = CORE_FIELD_MASK
+                trimmed = ",".join(f for f in self.field_mask.split(",")
+                                   if f in CORE_FIELD_MASK.split(","))
+                if headers["X-Goog-FieldMask"] != trimmed and "field" in str(exc).lower():
+                    headers["X-Goog-FieldMask"] = trimmed
                     if on_warn:
                         on_warn("Google rejected part of the field mask — "
                                 "retrying without priceRange / openingDate / "
                                 "googleMapsLinks")
-                    data = self._request("POST", PLACES_SEARCH_URL, sku=SEARCH_SKU,
+                    data = self._request("POST", PLACES_SEARCH_URL, sku=self.sku,
                                          json=body, headers=headers)
                 # An unrecognised type id shouldn't kill the run: drop the filter
                 # and fall back to a plain text search.
@@ -147,7 +152,7 @@ class PlacesClient:
                     if on_warn:
                         on_warn(f"type {bad!r} not accepted by the API — "
                                 "falling back to text search")
-                    data = self._request("POST", PLACES_SEARCH_URL, sku=SEARCH_SKU,
+                    data = self._request("POST", PLACES_SEARCH_URL, sku=self.sku,
                                          json=body, headers=headers)
                 else:
                     raise

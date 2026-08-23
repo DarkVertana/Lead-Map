@@ -12,7 +12,7 @@ import questionary
 import typer
 from dotenv import dotenv_values, find_dotenv, load_dotenv
 
-from .constants import DEFAULT_TILE_BUDGET, ENV_KEYS
+from .constants import DEFAULT_PLAN, DEFAULT_TILE_BUDGET, ENV_KEYS
 from .errors import PlacesError
 from .ui.report import short_path
 from .ui.theme import QUESTION_STYLE, console
@@ -51,6 +51,7 @@ class Settings:
     min_rating: Optional[float] = None
     open_now: bool = False
     name_match: bool = False
+    plan: str = DEFAULT_PLAN
     verify_location: bool = True
     verify_category: bool = True
     with_website_only: bool = False
@@ -117,6 +118,8 @@ def apply_env_defaults(settings: Settings, from_file: set[str]) -> Settings:
             settings.radius = float(raw)
         except ValueError:
             pass
+    if settings.plan == DEFAULT_PLAN and (raw := env_default("LEADMAP_PLAN", "PLACES_PLAN")):
+        settings.plan = raw
     if settings.grid == 1 and (raw := env_default("PLACES_GRID")):
         try:
             settings.grid = int(raw)
