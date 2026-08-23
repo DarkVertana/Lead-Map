@@ -7,6 +7,9 @@ straight to csv, excel, pdf or json. Stays inside the free tier on purpose.**
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![Licence: MIT](https://img.shields.io/badge/licence-MIT-green.svg)](LICENSE)
 [![Places API](https://img.shields.io/badge/Google-Places%20API%20%28New%29-e08c48.svg)](https://developers.google.com/maps/documentation/places/web-service/overview)
+[![Docs](https://img.shields.io/badge/docs-darkvertana.github.io-8a4a1c.svg)](https://darkvertana.github.io/Lead-Map/)
+
+📖 **[Full documentation →](https://darkvertana.github.io/Lead-Map/)**
 
 ```
 ╭──────────────────────────────╮
@@ -66,7 +69,8 @@ One-shot instead:
 ```
 
 You need a Google Cloud project with **Places API (New)** and **Geocoding API** enabled —
-see [Setup](#setup).
+see [Setup](#setup), or the [setup guide](https://darkvertana.github.io/Lead-Map/#/setup)
+in the docs.
 
 ---
 
@@ -326,9 +330,9 @@ Force either mode with `--guided` / `--no-guided` (`--chat` / `--no-chat` still 
 With `--no-guided`, or in a non-interactive shell, missing values are asked for as
 simple line prompts.
 
-### Field checks
+## Field checks
 
-#### Location
+### Location
 
 Before anything is geocoded, the location is checked against open data shipped with the
 tool — no network, no API call:
@@ -370,7 +374,7 @@ that's `--no-verify`. The postal codes come from
 [`tools/build_geodata.py`](tools/build_geodata.py), which re-downloads them from GeoNames and
 rewrites `leadmap/validate/data/postal_codes.py` — front-coded and compressed, 1.1 million codes take 1.1 MB.
 
-#### Category
+### Category
 
 The category is checked against **Google's own place types** — the 478 in Table A that a
 search may be filtered by, plus the 36 in Table B that Google returns on a place but
@@ -408,7 +412,7 @@ outright, because Google would refuse it too.
   it as a search filter
 ```
 
-### How much it finds
+## How much it finds
 
 One Google text search returns **at most 60 places**, however many are really there. So
 LeadMap searches the area, and whenever a search comes back full — a sure sign Google
@@ -445,7 +449,7 @@ The run always reports `tiles swept` and `api requests` so the bill is never a s
 `--max-results N` stops early on count, and `--grid N` pins the old fixed N×N layout if
 you want predictable spend instead of full coverage.
 
-### Changing format later
+## Changing format later
 
 A finished file can be rewritten in any other format without searching again — no API
 call, no quota, it reads the rows off disk:
@@ -468,7 +472,7 @@ call, no quota, it reads the rows off disk:
 It reads `.csv`, `.xlsx` and `.json`, and writes any of those plus `.pdf`. `--pdf-all`
 puts every column in the PDF instead of the essential twelve.
 
-### Staying inside the free tier
+## Staying inside the free tier
 
 Google retired the $200 monthly credit in March 2025. Every SKU now has its own monthly
 allowance of free calls, and the call after it is billed. The ones LeadMap touches
@@ -538,7 +542,7 @@ the same key is used elsewhere, the real total is higher. The guarantee lives in
 Cloud Console — APIs & Services → Places API (New) → Quotas → set *Requests per day* to
 around 33 and you cannot be billed regardless of what any client does.
 
-### Searching by business name
+## Searching by business name
 
 `--name` is **optional** and works alone or with `--category`; both feed the text query.
 
@@ -552,7 +556,7 @@ around 33 and you cannot be billed regardless of what any client does.
 
 You need a location, an output file, and at least one of `--name` / `--category`.
 
-### Options
+## Options
 
 | Flag | Meaning |
 |---|---|
@@ -727,6 +731,32 @@ Two things worth doing on day one:
 - Set a hard cap: **APIs & Services → Places API (New) → Quotas → Requests per day ≈ 33**.
   LeadMap's own ledger only knows about calls made through this machine; that quota is
   what actually makes overspending impossible.
+
+## Documentation
+
+The full documentation lives at **[darkvertana.github.io/Lead-Map](https://darkvertana.github.io/Lead-Map/)** —
+it goes deeper than this README: a data dictionary for all 33 columns, the sweep
+algorithm, the quota model, the command reference, and a troubleshooting guide.
+
+It's [docsify](https://docsify.js.org/), so it's just markdown in [`docs/`](docs/) with no
+build step. To preview a change locally:
+
+```bash
+python3 -m http.server 8000 --directory docs
+# then open http://localhost:8000
+```
+
+| Page | |
+|---|---|
+| [Setup](docs/setup.md) | API key, billing, restricting the key, troubleshooting |
+| [The guided session](docs/guided.md) | The four questions, the input box, what each one accepts |
+| [Commands](docs/commands.md) | Every slash command, with output |
+| [The command line](docs/cli.md) | All 33 flags, recipes, exit codes |
+| [Output](docs/output.md) | Formats, and what every column means |
+| [Field checks](docs/checks.md) | The offline validation, and the address split |
+| [How much it finds](docs/coverage.md) | The adaptive sweep, and how to tune it |
+| [The free tier](docs/free-tier.md) | SKUs, the ledger, the daily share |
+| [Architecture](docs/architecture.md) | Module map, data flow, where to change things |
 
 ## Contributing
 
