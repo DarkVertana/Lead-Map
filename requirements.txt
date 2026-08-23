@@ -1,0 +1,12 @@
+requests>=2.31         # HTTP with connection pooling + proper TLS via certifi
+python-dotenv>=1.0     # .env loading
+rich>=13.7             # panels, tables, spinners, colour
+typer>=0.12            # CLI with rich-formatted help
+questionary>=2.0       # one-shot prompts for the non-guided path
+pandas>=2.0            # tabular output: csv / xlsx / json
+openpyxl>=3.1          # xlsx writer for pandas
+reportlab>=4.0         # pdf writer
+tenacity>=8.2          # retry with exponential backoff
+prompt-toolkit>=3.0    # the inline input box of the guided session
+geonamescache>=2.0     # offline continents, countries and 34k cities (GeoNames)
+pycountry>=22.3        # offline states / provinces / regions (ISO 3166-2)

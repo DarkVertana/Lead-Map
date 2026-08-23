@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "leadmap"
+version = "2.0.0"
+description = "Business leads from Google Places — phone, address and ratings, to csv, excel, pdf or json"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "LeadMap contributors" }]
+keywords = [
+    "google-places", "google-maps", "lead-generation", "business-leads",
+    "scraper", "csv", "cli", "places-api",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "requests>=2.31",        # HTTP with connection pooling + proper TLS via certifi
+    "python-dotenv>=1.0",    # .env loading
+    "rich>=13.7",            # panels, tables, spinners, colour
+    "typer>=0.12",           # CLI with rich-formatted help
+    "questionary>=2.0",      # one-shot prompts for the --no-guided path
+    "prompt-toolkit>=3.0",   # the inline input box of the guided session
+    "pandas>=2.0",           # tabular output
+    "openpyxl>=3.1",         # xlsx writer for pandas
+    "reportlab>=4.0",        # pdf writer
+    "tenacity>=8.2",         # retry with exponential backoff
+    "geonamescache>=2.0",    # offline continents, countries and cities (GeoNames)
+    "pycountry>=22.3",       # offline states / provinces / regions (ISO 3166-2)
+]
+
+[project.urls]
+Homepage = "https://github.com/DarkVertana/Lead-Map"
+Repository = "https://github.com/DarkVertana/Lead-Map"
+Issues = "https://github.com/DarkVertana/Lead-Map/issues"
+
+[project.scripts]
+leadmap = "leadmap.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["leadmap*"]
+
+[tool.setuptools.package-data]
+"leadmap.validate.data" = ["*.py"]
