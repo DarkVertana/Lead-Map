@@ -4,8 +4,9 @@ The opening screen: a boxed welcome line over the tool's name in block letters.
 Everything here is drawn from a 5×5 pixel font defined below — one dict of
 glyphs, scaled to two terminal cells per pixel and given a one-cell drop shadow,
 so the name reads as chunky 3D type. It wraps by word to the terminal width
-(LEAD / MAP stacks on a narrow terminal, LEAD MAP sits on one line on a wide
-one) and falls back to plain text on anything too narrow to draw.
+(BUSINESS / LEAD stacks on a narrow terminal, BUSINESS LEAD sits on one line on
+a wide one), halves the pixel width when even one word won't fit, and falls back
+to plain text on anything too narrow to draw at all.
 """
 
 from __future__ import annotations
@@ -82,7 +83,7 @@ GLYPH_HEIGHT = 5
 # ---------------------------------------------------------------------------
 
 def split_words(title: str) -> list[str]:
-    """'LeadMap v2' → ['LEAD', 'MAP', 'V2'] — camel case counts as a break."""
+    """'BusinessLead v2' → ['BUSINESS', 'LEAD', 'V2'] — camel case counts as a break."""
     words: list[str] = []
     for chunk in title.replace("-", " ").replace("_", " ").split():
         current = ""
@@ -124,39 +125,40 @@ def _join(bitmaps: list[list[list[bool]]]) -> list[list[bool]]:
     return rows
 
 
-def cell_width(bitmap: list[list[bool]]) -> int:
+def cell_width(bitmap: list[list[bool]], pixel: int = PIXEL_WIDTH) -> int:
     """How many terminal columns the drawn bitmap needs, shadow included."""
-    return len(bitmap[0]) * PIXEL_WIDTH + 1 if bitmap and bitmap[0] else 0
+    return len(bitmap[0]) * pixel + 1 if bitmap and bitmap[0] else 0
 
 
 # ---------------------------------------------------------------------------
 # Pixels → terminal cells
 # ---------------------------------------------------------------------------
 
-def _grid(bitmap: list[list[bool]]) -> list[list[int]]:
+def _grid(bitmap: list[list[bool]], pixel: int = PIXEL_WIDTH) -> list[list[int]]:
     """Cells of MAIN, over a dark ground shadow nudged down and right.
 
     The shadow is cast only by the baseline row. Casting it from every pixel
     (a true 3D offset) fills the one-pixel counters and notches inside the
     letters at this size, and the name stops being readable.
     """
-    height, width = len(bitmap) + 1, cell_width(bitmap)
+    height, width = len(bitmap) + 1, cell_width(bitmap, pixel)
     grid = [[0] * width for _ in range(height)]
     for x, inked in enumerate(bitmap[-1]):
         if inked:
-            for cell in range(PIXEL_WIDTH):
-                grid[-1][x * PIXEL_WIDTH + 1 + cell] = SHADOW
+            for cell in range(pixel):
+                grid[-1][x * pixel + 1 + cell] = SHADOW
     for y, row in enumerate(bitmap):
         for x, inked in enumerate(row):
             if inked:
-                for cell in range(PIXEL_WIDTH):
-                    grid[y][x * PIXEL_WIDTH + cell] = MAIN
+                for cell in range(pixel):
+                    grid[y][x * pixel + cell] = MAIN
     return grid
 
 
-def _lines(bitmap: list[list[bool]], main: str, shadow: str) -> list[Text]:
+def _lines(bitmap: list[list[bool]], main: str, shadow: str,
+           pixel: int = PIXEL_WIDTH) -> list[Text]:
     out: list[Text] = []
-    for row in _grid(bitmap):
+    for row in _grid(bitmap, pixel):
         line = Text(" " * MARGIN)
         run, style = 0, 0
         for cell in row + [0]:                             # sentinel flushes the tail
@@ -178,20 +180,26 @@ def big_text(title: str, width: int, *, main: str = "brand",
     if not words:
         return []
     bitmaps = [_bitmap(word) for word in words]
-    if max(cell_width(b) for b in bitmaps) + MARGIN > width:
+    # The longest word decides the scale. Two cells per pixel is the design, but
+    # a word as long as BUSINESS needs 96 columns at that size — wider than the
+    # 80 a terminal is assumed to have. Half-width pixels still read as block
+    # letters, and reading narrow beats not drawing the name at all.
+    pixel = next((p for p in range(PIXEL_WIDTH, 0, -1)
+                  if max(cell_width(b, p) for b in bitmaps) + MARGIN <= width), 0)
+    if not pixel:
         return []                                          # too narrow to draw
 
     lines: list[Text] = []
     row: list[list[list[bool]]] = []
     for bitmap in bitmaps:
         candidate = row + [bitmap]
-        if row and cell_width(_join(candidate)) + MARGIN > width:
-            lines.extend(_lines(_join(row), main, shadow))
+        if row and cell_width(_join(candidate), pixel) + MARGIN > width:
+            lines.extend(_lines(_join(row), main, shadow, pixel))
             row = [bitmap]
         else:
             row = candidate
     if row:
-        lines.extend(_lines(_join(row), main, shadow))
+        lines.extend(_lines(_join(row), main, shadow, pixel))
     return lines
 
 

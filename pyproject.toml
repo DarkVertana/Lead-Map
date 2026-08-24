@@ -3,14 +3,14 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "leadmap"
+name = "businesslead"
 version = "2.0.0"
 description = "Business leads from Google Places — phone, address and ratings, to csv, excel, pdf or json"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
-authors = [{ name = "LeadMap contributors" }]
+authors = [{ name = "Business Lead contributors" }]
 keywords = [
     "google-places", "google-maps", "lead-generation", "business-leads",
     "scraper", "csv", "cli", "places-api",
@@ -44,15 +44,15 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/DarkVertana/Lead-Map"
-Repository = "https://github.com/DarkVertana/Lead-Map"
-Issues = "https://github.com/DarkVertana/Lead-Map/issues"
+Homepage = "https://github.com/DarkVertana/Business-Lead"
+Repository = "https://github.com/DarkVertana/Business-Lead"
+Issues = "https://github.com/DarkVertana/Business-Lead/issues"
 
 [project.scripts]
-leadmap = "leadmap.cli:app"
+businesslead = "businesslead.cli:app"
 
 [tool.setuptools.packages.find]
-include = ["leadmap*"]
+include = ["businesslead*"]
 
 [tool.setuptools.package-data]
-"leadmap.validate.data" = ["*.py"]
+"businesslead.validate.data" = ["*.py", "*.json"]

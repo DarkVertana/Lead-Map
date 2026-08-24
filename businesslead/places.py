@@ -29,6 +29,8 @@ class PlacesClient:
         self.sku = sku                  # and therefore what it bills at
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": f"places-scraper/{VERSION}"})
+        self.rejected_type = None       # an includedType Google refused, if any
+        self.partial_tile = False       # last search cut short by quota mid-page
 
     # tenacity handles the transient cases; everything else surfaces immediately
     @retry(retry=retry_if_exception_type(RetryableError),
@@ -48,6 +50,7 @@ class PlacesClient:
             self._refund(sku)                     # Google doesn't bill these
             raise RetryableError(f"HTTP {response.status_code} from Google, retrying")
         if response.status_code >= 400:
+            self._refund(sku)                     # error responses aren't billed either
             raise PlacesError(f"HTTP {response.status_code}: {self._error_text(response)}")
         try:
             return response.json()
@@ -55,9 +58,9 @@ class PlacesClient:
             raise PlacesError(f"malformed response from Google: {exc}") from exc
 
     def _refund(self, sku) -> None:
-        if self.budget is not None and sku is not None:
-            self.budget.record(sku, -1)
-            self.requests -= 1
+        self.requests -= 1              # the attempt never completed
+        if self.budget is not None and sku is not None and sku.free_per_month > 0:
+            self.budget.record(sku, -1)   # take() records nothing for unmetered SKUs
 
     @staticmethod
     def _error_text(response: requests.Response) -> str:
@@ -103,6 +106,7 @@ class PlacesClient:
                     min_rating: float | None = None,
                     on_warn=None) -> list[dict[str, Any]]:
         """One text search, following pagination up to the API's 3-page cap."""
+        self.partial_tile = False
         headers = {"X-Goog-Api-Key": self.api_key,
                    "X-Goog-FieldMask": self.field_mask}
         body: dict[str, Any] = {
@@ -113,7 +117,7 @@ class PlacesClient:
                 "radius": float(tile.radius),
             }},
         }
-        if included_type:
+        if included_type and included_type != self.rejected_type:
             body["includedType"] = included_type
         if language:
             body["languageCode"] = language
@@ -132,13 +136,25 @@ class PlacesClient:
             try:
                 data = self._request("POST", PLACES_SEARCH_URL, sku=self.sku,
                                      json=body, headers=headers)
+            except quota.QuotaExceeded:
+                # The pages already paid for are worth keeping. The caller learns
+                # it is out of quota on its next tile, before spending anything.
+                if not collected:
+                    raise
+                self.partial_tile = True     # searched, but not to the bottom
+                if on_warn:
+                    on_warn("today's free calls ran out part-way through a search — "
+                            "keeping the results already paid for")
+                break
             except PlacesError as exc:
                 # Nor should a field Google has renamed: drop the optional ones
-                # and ask again with the mask we know it accepts.
+                # and ask again with the mask we know it accepts — and remember,
+                # so the next 200 tiles don't each pay to rediscover it.
                 trimmed = ",".join(f for f in self.field_mask.split(",")
                                    if f in CORE_FIELD_MASK.split(","))
                 if headers["X-Goog-FieldMask"] != trimmed and "field" in str(exc).lower():
                     headers["X-Goog-FieldMask"] = trimmed
+                    self.field_mask = trimmed
                     if on_warn:
                         on_warn("Google rejected part of the field mask — "
                                 "retrying without priceRange / openingDate / "
@@ -146,9 +162,10 @@ class PlacesClient:
                     data = self._request("POST", PLACES_SEARCH_URL, sku=self.sku,
                                          json=body, headers=headers)
                 # An unrecognised type id shouldn't kill the run: drop the filter
-                # and fall back to a plain text search.
+                # and fall back to a plain text search, for this and every tile.
                 elif "includedType" in body and "includedtype" in str(exc).lower():
                     bad = body.pop("includedType")
+                    self.rejected_type = bad
                     if on_warn:
                         on_warn(f"type {bad!r} not accepted by the API — "
                                 "falling back to text search")

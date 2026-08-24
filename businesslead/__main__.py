@@ -1,4 +1,4 @@
-"""python -m leadmap"""
+"""python -m businesslead"""
 
 from .cli import app
 

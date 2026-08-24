@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Keeps LeadMap inside Google's free tier, and splits the month into days.
+Keeps Business Lead inside Google's free tier, and splits the month into days.
 
 Since March 2025 there is no $200 credit: every Maps Platform SKU has its own
 monthly allowance of free calls, and the first call past it is billed. The
@@ -18,12 +18,16 @@ A request bills at the **highest tier any field in its field mask belongs to**,
 so the SKU below is worked out from FIELD_MASK itself: trim the mask and the
 allowance this module enforces goes up with it.
 
-Every call is written to a ledger (~/.local/state/leadmap/usage.json) and the
+Every call is written to a ledger (~/.local/state/businesslead/usage.json) and the
 month's allowance is shared across the days left in it, so one afternoon can't
 eat the month. Nothing is spent once a day's share is gone.
 
-    leadmap --usage             # what's left today and this month
-    leadmap --usage --verbose   # a day-by-day record of the current month
+    businesslead --usage             # what's left today and this month
+    businesslead --usage --verbose   # a day-by-day record of the current month
+
+Both budgets can be moved: --daily-cap / --monthly-cap for one run, or
+BUSINESSLEAD_DAILY_CAP / BUSINESSLEAD_MONTHLY_CAP in .env to make it standing policy.
+The caps govern searches; Geocoding keeps its own 10,000/month allowance.
 
 The ledger only knows about calls made through this machine. If the same key is
 used elsewhere, set a hard cap in the Google Cloud console too.
@@ -35,15 +39,49 @@ import calendar
 import datetime as dt
 import json
 import os
-import tempfile
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from .paths import state_dir
+from .errors import PlacesError
+from .paths import FileLock, env, set_aside, state_dir, write_json_atomic
 
 LEDGER_VERSION = 1
 KEEP_DAYS = 400
+
+# The caps can live in .env as well as on the command line. BUSINESSLEAD_ is the
+# primary name (they govern spend, not one search); PLACES_ is accepted the
+# same way PLACES_PLAN is.
+ENV_DAILY_CAP = ("BUSINESSLEAD_DAILY_CAP", "PLACES_DAILY_CAP", "LEADMAP_DAILY_CAP")
+ENV_MONTHLY_CAP = ("BUSINESSLEAD_MONTHLY_CAP", "PLACES_MONTHLY_CAP",
+                   "LEADMAP_MONTHLY_CAP")
+
+
+def parse_cap(label: str, raw) -> int:
+    """A cap from a flag or .env: a whole number of calls, at least 1.
+
+    Zero used to silently mean "use the default" (0 is falsy), so nobody can be
+    relying on it — it is rejected rather than given a new meaning.
+    """
+    try:
+        value = int(str(raw).strip())
+    except ValueError:
+        raise PlacesError(f"{label} must be a whole number of calls, "
+                          f"not {raw!r}") from None
+    if value < 1:
+        raise PlacesError(f"{label} must be at least 1 — "
+                          "to spend nothing, just don't search")
+    return value
+
+
+def cap_from_env(names: tuple[str, ...]) -> tuple[Optional[int], str]:
+    """(value, variable name) for the first of `names` that is set, parsed."""
+    for name in names:
+        raw = os.environ.get(name, "").strip()
+        if raw:
+            return parse_cap(name, raw), name
+    return None, ""
 
 
 def human_date(day: dt.date) -> str:
@@ -157,7 +195,7 @@ def cheaper_masks(field_mask: str) -> list[tuple[Sku, list[str]]]:
 # ---------------------------------------------------------------------------
 
 def default_ledger_path() -> Path:
-    override = os.environ.get("LEADMAP_USAGE_FILE")
+    override = env("USAGE_FILE")
     if override:
         return Path(override).expanduser()
     return state_dir() / "usage.json"
@@ -170,11 +208,15 @@ class Status:
     used_month: int
     allowance_today: int
     month: str          # 'Aug 2026'
+    monthly_free: int = 0    # the month's effective ceiling: the SKU's, or a cap
 
+    def __post_init__(self) -> None:
+        if not self.monthly_free:
+            self.monthly_free = self.sku.free_per_month
 
     @property
     def left_month(self) -> int:
-        return max(0, self.sku.free_per_month - self.used_month)
+        return max(0, self.monthly_free - self.used_month)
 
     @property
     def left_today(self) -> int:
@@ -188,7 +230,7 @@ class Status:
         if self.unlimited:
             return f"{self.sku.label}: free, unmetered"
         return (f"{self.left_today:,} left today · "
-                f"{self.left_month:,} of {self.sku.free_per_month:,} left this month")
+                f"{self.left_month:,} of {self.monthly_free:,} left this month")
 
 
 class Quota:
@@ -199,32 +241,93 @@ class Quota:
         self.path = Path(path) if path else default_ledger_path()
         self.daily_cap = daily_cap
         self.monthly_cap = monthly_cap
-        self.today = today or dt.date.today()
+        self._today = today                # tests pin a date; live runs never do
         self.data = self._read()
+        # What the file held when it was read: save() writes disk + (now − this),
+        # so two runs at once each add their own spending instead of the later
+        # one erasing the earlier one's.
+        self._baseline = {day: dict(counts)
+                          for day, counts in self.data["days"].items()}
+        self._warned = False
+
+    @property
+    def today(self) -> dt.date:
+        """The real date, every time it's asked — a sweep that crosses midnight
+        books its later calls to the new day, the way Google's meter does."""
+        return self._today or dt.date.today()
 
     # -- storage -------------------------------------------------------------
     def _read(self) -> dict:
         try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
-            if isinstance(data, dict) and data.get("version") == LEDGER_VERSION:
-                return data
-        except (OSError, ValueError):
-            pass
+            raw = self.path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return {"version": LEDGER_VERSION, "days": {}}
+        except OSError as exc:
+            # The file exists but can't be read. Say so — this module is the
+            # billing protection, and pretending the month is unspent isn't it.
+            print(f"! the usage ledger at {self.path} can't be read ({exc}) — "
+                  "counts may be low until that's fixed", file=sys.stderr)
+            return {"version": LEDGER_VERSION, "days": {}}
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            set_aside(self.path, self.today)     # a year of usage, kept aside
+            return {"version": LEDGER_VERSION, "days": {}}
+        if isinstance(data, dict) and data.get("version") == LEDGER_VERSION:
+            return data
+        set_aside(self.path, self.today)
         return {"version": LEDGER_VERSION, "days": {}}
+
+    def _merged_days(self, disk_days: dict) -> dict[str, dict]:
+        """What's on disk now, plus what this process spent since it loaded."""
+        merged = {day: {key: int(count) for key, count in counts.items()}
+                  for day, counts in disk_days.items() if isinstance(counts, dict)}
+        for day in set(self.data["days"]) | set(self._baseline):
+            now = self.data["days"].get(day, {})
+            before = self._baseline.get(day, {})
+            for key in set(now) | set(before):
+                delta = int(now.get(key, 0)) - int(before.get(key, 0))
+                if not delta:
+                    continue
+                counts = merged.setdefault(day, {})
+                counts[key] = max(0, int(counts.get(key, 0)) + delta)
+        return {day: {key: count for key, count in counts.items() if count}
+                for day, counts in merged.items() if any(counts.values())}
 
     def save(self) -> None:
         cutoff = (self.today - dt.timedelta(days=KEEP_DAYS)).isoformat()
-        self.data["days"] = {day: counts for day, counts in self.data["days"].items()
-                             if day >= cutoff}
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            with tempfile.NamedTemporaryFile("w", dir=self.path.parent, delete=False,
-                                             encoding="utf-8") as handle:
-                json.dump(self.data, handle, indent=1, sort_keys=True)
-                temporary = Path(handle.name)
-            temporary.replace(self.path)             # atomic: never a half file
-        except OSError:
-            pass                                     # a read-only home shouldn't stop a search
+            with FileLock(self.path.with_name(self.path.name + ".lock")):
+                try:
+                    raw = self.path.read_text(encoding="utf-8")
+                except FileNotFoundError:
+                    raw = ""
+                # any other read error propagates: better not to write at all
+                # than to overwrite a ledger we couldn't read
+                disk_days: dict = {}
+                if raw:
+                    try:
+                        on_disk = json.loads(raw)
+                    except ValueError:
+                        set_aside(self.path, self.today)   # keep the evidence
+                    else:
+                        if (isinstance(on_disk, dict)
+                                and on_disk.get("version") == LEDGER_VERSION
+                                and isinstance(on_disk.get("days"), dict)):
+                            disk_days = on_disk["days"]
+                days = {day: counts
+                        for day, counts in self._merged_days(disk_days).items()
+                        if day >= cutoff}
+                self.data = {"version": LEDGER_VERSION, "days": days}
+                write_json_atomic(self.path, self.data, indent=1, sort_keys=True)
+            self._baseline = {day: dict(counts) for day, counts in days.items()}
+        except OSError as exc:
+            if not self._warned:      # once is a warning, every save is noise
+                self._warned = True
+                print(f"! couldn't write the usage ledger at {self.path} ({exc}) "
+                      "— calls made now may not be counted against the free tier",
+                      file=sys.stderr)
 
     # -- counting ------------------------------------------------------------
     def used_on(self, sku: Sku, day: dt.date) -> int:
@@ -238,33 +341,52 @@ class Quota:
 
     def record(self, sku: Sku, calls: int = 1) -> None:
         day = self.data["days"].setdefault(self.today.isoformat(), {})
-        day[sku.key] = int(day.get(sku.key, 0)) + calls
+        day[sku.key] = max(0, int(day.get(sku.key, 0)) + calls)
 
     # -- budgets -------------------------------------------------------------
-    def allowance_today(self, sku: Sku) -> int:
-        """This month's remaining free calls, shared over the days left in it.
+    def _capped(self, sku: Sku) -> bool:
+        """The caps govern searches. Geocoding keeps Google's own allowance —
+        one number in .env shouldn't quietly throttle a 10,000-call SKU."""
+        return sku.key != GEOCODING.key
 
+    def monthly_free(self, sku: Sku) -> int:
+        """The month's ceiling for this SKU: Google's, unless a cap says
+        otherwise — lower to stay safer, higher if Google changes its tier."""
+        if self.monthly_cap is not None and self._capped(sku):
+            return self.monthly_cap
+        return sku.free_per_month
+
+    def allowance_today(self, sku: Sku) -> int:
+        """The most today may spend in total — not what it has left to spend.
+
+        This month's remaining free calls, shared over the days left in it.
         Unused days carry forward — sit out a week and the daily share grows —
         but the month's total is never exceeded.
         """
         if sku.free_per_month == 0:
             return 10 ** 9                                    # unmetered SKU
-        monthly = self.monthly_cap or sku.free_per_month
-        left = max(0, monthly - self.used_in_month(sku))
+        left = max(0, self.monthly_free(sku) - self.used_in_month(sku))
         if not left:
             return 0
         days_in_month = calendar.monthrange(self.today.year, self.today.month)[1]
         days_left = days_in_month - self.today.day + 1
         share = max(1, left // max(1, days_left))
-        if self.daily_cap:
+        if self.daily_cap is not None and self._capped(sku):
             share = self.daily_cap
-        return min(share, left)
+        # The ceiling is what the month can still afford *plus what today has
+        # already spent*, because `left` counts today's calls as gone and this
+        # is today's whole budget, not the rest of it. Clamping to `left` alone
+        # subtracted them twice — Status.left_today takes them off again — so a
+        # day that had spent the month's whole remainder could never be raised:
+        # /borrow said "borrowed 40" and left you with nought.
+        return min(share, left + self.used_on(sku, self.today))
 
     def status(self, sku: Sku) -> Status:
         return Status(sku=sku, used_today=self.used_on(sku, self.today),
                       used_month=self.used_in_month(sku),
                       allowance_today=self.allowance_today(sku),
-                      month=self.month_name())
+                      month=self.month_name(),
+                      monthly_free=self.monthly_free(sku))
 
     def left_today(self, sku: Sku) -> int:
         if sku.free_per_month == 0:
@@ -278,15 +400,20 @@ class Quota:
         if self.left_today(sku) < calls:
             status = self.status(sku)
             if status.left_month <= 0:
-                raise QuotaExceeded(
-                    f"the {sku.free_per_month:,} free {sku.label} calls for "
+                message = (
+                    f"the {status.monthly_free:,} free {sku.label} calls for "
                     f"{self.month_name()} are used up — the allowance resets on "
                     f"{human_date(self.next_month())}")
+                if status.monthly_free != sku.free_per_month:
+                    message += (" (a monthly cap set that ceiling — raise it to "
+                                "keep going)")
+                raise QuotaExceeded(message)
             raise QuotaExceeded(
                 f"today's share of the free tier is used up "
                 f"({status.used_today:,} of {status.allowance_today:,} "
                 f"{sku.label} calls) — {status.left_month:,} left this month, "
-                f"back tomorrow or use --daily-cap to borrow from it")
+                f"back tomorrow or use --daily-cap (BUSINESSLEAD_DAILY_CAP in .env) "
+                "to borrow from it")
         self.record(sku, calls)
 
     def month_name(self) -> str:
@@ -295,7 +422,7 @@ class Quota:
     def reset_today(self, *skus: Sku) -> dict[str, int]:
         """Zero today's counters and return what they were.
 
-        This only clears LeadMap's own bookkeeping — Google's meter is untouched,
+        This only clears Business Lead's own bookkeeping — Google's meter is untouched,
         so the calls it forgets have still been spent. For development.
         """
         day = self.data["days"].get(self.today.isoformat(), {})
@@ -331,18 +458,38 @@ class Quota:
 # CLI
 # ---------------------------------------------------------------------------
 
-def main(argv: list[str]) -> int:
+def main(argv: list[str], daily_cap: Optional[int] = None,
+         monthly_cap: Optional[int] = None) -> int:
     from .constants import FIELD_MASK                # the live mask
 
     if argv and argv[0] in ("-h", "--help"):
         print(__doc__.strip())
         return 0
 
-    quota = Quota()
+    # The caps the flags didn't set can still come from .env / the environment,
+    # so --usage reports the same numbers a search would enforce.
+    try:
+        daily_source = "--daily-cap" if daily_cap is not None else ""
+        monthly_source = "--monthly-cap" if monthly_cap is not None else ""
+        if daily_cap is None:
+            daily_cap, daily_source = cap_from_env(ENV_DAILY_CAP)
+        if monthly_cap is None:
+            monthly_cap, monthly_source = cap_from_env(ENV_MONTHLY_CAP)
+    except PlacesError as exc:
+        print(f"  ! {exc}")
+        return 1
+
+    quota = Quota(daily_cap=daily_cap, monthly_cap=monthly_cap)
     search = sku_for_mask(FIELD_MASK)
     print(f"  ledger  {quota.path}")
     print(f"  billed as  {search.label}"
           f"  ({search.free_per_month:,} free/month, then ${search.price_per_1000:.0f}/1k)")
+    caps = [f"{kind} {value:,} ({source})" for kind, value, source
+            in (("daily", daily_cap, daily_source),
+                ("monthly", monthly_cap, monthly_source))
+            if value is not None]
+    if caps:
+        print(f"  capped  {' · '.join(caps)}")
     print()
     quota_month = quota.month_name()
     # every SKU with usage this month, plus the one we'd bill at right now:
@@ -357,7 +504,7 @@ def main(argv: list[str]) -> int:
         print(f"    {'today':<9}{status.used_today:>6,} used   "
               f"{status.left_today:>6,} left")
         print(f"    {quota_month:<9}{status.used_month:>6,} used   "
-              f"{status.left_month:>6,} left of {sku.free_per_month:,}")
+              f"{status.left_month:>6,} left of {status.monthly_free:,}")
     if argv and argv[0] == "--month":
         print(f"\n  day by day ({quota.month_name()})")
         for day, calls in quota.month_rows(search):

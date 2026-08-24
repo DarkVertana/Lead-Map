@@ -61,7 +61,8 @@ def split_address(formatted: str, *, city: str = "", state: str = "", postal: st
     return ", ".join(kept[:-1]), kept[-1]
 
 
-def to_row(place: dict[str, Any], category: str, query: str, searched_name: str = "") -> dict:
+def to_row(place: dict[str, Any], category: str, query: str, searched_name: str = "",
+           extracted_on: str = "") -> dict:
     comps = place.get("addressComponents")
     loc = place.get("location") or {}
     hours = place.get("regularOpeningHours") or {}
@@ -123,6 +124,7 @@ def to_row(place: dict[str, Any], category: str, query: str, searched_name: str 
         "place_id": place.get("id", ""),
         "search_query": query,
         "searched_name": searched_name,
+        "extracted_on": extracted_on,
     }
 
 

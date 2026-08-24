@@ -1,31 +1,51 @@
 # Output
 
-Every search writes one file. The format follows the extension you give it, and a bare
-filename lands in a dated folder.
+Every search has one file. The format follows the extension you give it, and a bare
+filename lands in the output folder.
 
 ```
-output/2026-08-24/barber_nashik.csv
+Business Lead/barber_nashik.csv
 ```
 
-`LEADMAP_OUTPUT_DIR` moves the root. A name with a directory in it — `~/Desktop/leads.pdf`,
+`BUSINESSLEAD_OUTPUT_DIR` moves the root. A name with a directory in it — `~/Desktop/leads.pdf`,
 `reports/q3.xlsx` — is left exactly where you put it.
+
+## Run it again and the file grows
+
+The same search run again adds what it finds to the file it already has, rather than
+starting another one beside it. New rows go under the existing ones, which keep their
+order and their dates, and the `extracted_on` column says which day each row arrived:
+
+| name | phone | … | extracted_on |
+|---|---|---|---|
+| Sharma Dental | +91 … | | 2026-08-24 |
+| City Dental | +91 … | | 2026-08-24 |
+| Nova Dental | +91 … | | 2026-09-01 |
+
+A business that turns up in both runs stays as the row already there, dated when it was
+first delivered — `place_id` is what decides, so an edit you made to a row survives.
+
+Two things are never merged, because they can't be read back: a **PDF**, and a file that
+won't parse. Those get a numbered name of their own (`barber_nashik-2.pdf`) and whatever
+was there is left alone. The file is also written beside itself and moved into place, so a
+run that dies half way leaves the previous one whole rather than truncated.
 
 ## Formats
 
 | Format | Columns | Good for |
 |---|---|---|
-| `.csv` | all 33 | Excel, Sheets, importing anywhere. Written with a UTF-8 BOM so Excel opens it without the encoding dance. |
-| `.xlsx` | all 33 | A real workbook, one sheet named `businesses`. |
-| `.json` | all 33 | Feeding another program. One object per business, `null` for blanks. |
+| `.csv` | all 34 | Excel, Sheets, importing anywhere. Written with a UTF-8 BOM so Excel opens it without the encoding dance. |
+| `.xlsx` | all 34 | A real workbook, one sheet named `businesses`. |
+| `.json` | all 34 | Feeding another program. One object per business, `null` for blanks. |
 | `.pdf` | the essential 12 | Reading, printing, sending to someone who won't open a spreadsheet. A4 landscape, header repeated on every page. |
 
 The PDF carries **name, type, phone, website, street, area, city, state, postcode,
-rating, reviews, status** — and says so in its own header line. `--pdf-all` puts all 33
+rating, reviews, status** — and says so in its own header line. `--pdf-all` puts all 34
 in instead, at roughly 4pt on A3, which is legible but not pleasant.
 
 ## The columns
 
-33 per row, in reading order.
+34 per row, in reading order.
 
 ### Who they are
 
@@ -94,6 +114,7 @@ See [Field checks → the address split](checks.md) for why this needs two strat
 | `place_id` | `ChIJn_pd_RHr3TsR8pQsW7k1qdU` | Google's stable id. Rows are deduplicated on this. |
 | `search_query` | `barber in Nashik, Maharashtra, India` | The exact text sent to Google. |
 | `searched_name` | `Apollo Pharmacy` | The `--name` you gave, if any. |
+| `extracted_on` | `2026-08-24` | The day this row was written. A file is added to by every later run of the same search, so this is what tells one run's findings from the next. |
 
 Rows are deduplicated by `place_id` and sorted by `reviews_count` descending, so the
 best-known businesses are at the top of the file.
@@ -104,17 +125,17 @@ A finished file can be rewritten in any other format without searching again —
 the rows off disk, so no API call and no quota:
 
 ```bash
-leadmap --convert barber_nashik.csv                 # → .pdf, .xlsx and .json
-leadmap --convert barber_nashik.csv --to pdf        # just the one
-leadmap --convert leads.xlsx --to "csv, json"
-leadmap --convert leads.csv --to pdf --pdf-all      # every column in the PDF
+businesslead --convert barber_nashik.csv                 # → .pdf, .xlsx and .json
+businesslead --convert barber_nashik.csv --to pdf        # just the one
+businesslead --convert leads.xlsx --to "csv, json"
+businesslead --convert leads.csv --to pdf --pdf-all      # every column in the PDF
 ```
 
 ```
-⏺ Converting output/2026-08-24/barber_nashik.csv
-  ⎿ rows       121 × 33 columns
-  ⎿ ✓ pdf   output/2026-08-24/barber_nashik.pdf
-  ⎿ ✓ xlsx  output/2026-08-24/barber_nashik.xlsx
+⏺ Converting Business Lead/barber_nashik.csv
+  ⎿ rows       121 × 34 columns
+  ⎿ ✓ pdf   Business Lead/barber_nashik.pdf
+  ⎿ ✓ xlsx  Business Lead/barber_nashik.xlsx
 
   no API calls — the data came off disk
 ```
@@ -125,12 +146,12 @@ search finishes — see [The guided session](guided.md#another-copy).
 
 ## Merging several runs
 
-Every file has the same 33 columns and `place_id` is stable, so files combine cleanly:
+Every file has the same 34 columns and `place_id` is stable, so files combine cleanly:
 
 ```python
 import pandas as pd, glob
 
-frames = [pd.read_csv(path, encoding="utf-8-sig") for path in glob.glob("output/*/*.csv")]
+frames = [pd.read_csv(path, encoding="utf-8-sig") for path in glob.glob("Business Lead/*.csv")]
 leads = pd.concat(frames).drop_duplicates("place_id").sort_values("reviews_count",
                                                                   ascending=False)
 leads.to_csv("all_leads.csv", index=False, encoding="utf-8-sig")

@@ -4,7 +4,7 @@ One package, laid out by job. Nothing is longer than it needs to be — the larg
 is the search itself at ~320 lines.
 
 ```
-leadmap/
+businesslead/
 ├── cli.py                flags in; a search, a conversion or a usage report out
 ├── session.py            the guided session: questions, input box, commands
 ├── search.py             one run end to end: check, locate, sweep, write, report
@@ -27,12 +27,14 @@ leadmap/
     ├── place_types.py    is that a real Google category?
     └── data/
         └── postal_codes.py   1,080,715 codes, generated — don't hand-edit
+
+countries.json            every country, state and city — edit it to correct a name
 ```
 
 ## What happens during a run
 
 ```
-  leadmap -l "Nashik" -c barber -o leads.csv
+  businesslead -l "Nashik, India" -c barber -o leads.csv
         │
         ▼
   cli.main ──── config: flags › environment › .env ──────────────┐
@@ -49,7 +51,7 @@ leadmap/
         ├─▶ the sweep ─── geometry.build_tiles ──┐
         │      │                                 │
         │      ├─▶ places.search_text   1–3 calls per tile
-        │      ├─▶ records.to_row       result → 33 columns
+        │      ├─▶ records.to_row       result → 34 columns
         │      └─▶ geometry.split_tile  if the tile came back full ──┘
         │
         ├─▶ export.write_dataframe   csv · xlsx · pdf · json
@@ -70,14 +72,25 @@ deliberate.
 **Change what the PDF shows.** `PDF_COLUMNS` in `export.py`. Widths come from
 `COLUMN_WEIGHTS` in the same file; the font shrinks automatically as columns are added.
 
-**Tune the sweep.** `SATURATED`, `MIN_TILE_RADIUS` and `DEFAULT_TILE_BUDGET` in
-`constants.py`.
+**Tune the sweep.** `SATURATED` and `MIN_TILE_RADIUS` in `constants.py`. There is no
+tile budget: the sweep runs until the day's free calls are gone, unless `--max-tiles`
+caps it.
+
+**What has already been delivered.** `delivered.py` — the place ids every earlier run
+handed over, so no business is ever sent twice. `frontier.py` holds the other half: the
+circles each search has already covered and the ones still queued, so tomorrow's run
+carries on instead of paying to re-read yesterday's ground. `DRY_TILES` in `constants.py`
+is how many fruitless searches in a row end a sweep early. `geocache.py` remembers where a location
+is, for good, so no run after the first ever pays to locate it again.
 
 **Add a slash command.** Write a `_cmd_*` function in `session.py` and add one `Command`
 to the `COMMANDS` list. `/help` builds itself from that list.
 
 **Add a category alias.** `ALIASES` in `validate/place_types.py` — the mapping from what
 people type to what Google accepts.
+
+**Refresh the place names.** `python tools/build_countries.py` rebuilds `countries.json`
+from GeoNames and ISO 3166-2 — and overwrites anything you corrected in it by hand.
 
 **Refresh the postal codes.** `python tools/build_geodata.py` re-downloads them from
 GeoNames and rewrites `validate/data/postal_codes.py`.
@@ -94,13 +107,13 @@ GeoNames and rewrites `validate/data/postal_codes.py`.
 | `questionary` | Line prompts on the `--no-guided` path |
 | `pandas` (+`openpyxl`) | Sorting, stats and CSV / XLSX / JSON output |
 | `reportlab` | The PDF table |
-| `geonamescache` | Offline continents, countries and cities |
-| `pycountry` | Offline states / provinces / regions |
+| `geonamescache` | Source for `countries.json`, and the fallback if it won't parse |
+| `pycountry` | States / provinces / regions for the same |
 | `python-dotenv` | `.env` loading |
 
 ## Data and licences
 
-LeadMap is MIT licensed. The datasets it ships are not ours:
+Business Lead is MIT licensed. The datasets it ships are not ours:
 
 | Data | Source | Licence |
 |---|---|---|
@@ -109,7 +122,7 @@ LeadMap is MIT licensed. The datasets it ships are not ours:
 | 478 + 36 place types | [Google Places documentation](https://developers.google.com/maps/documentation/places/web-service/place-types) | Google's terms |
 
 Business data comes from the Google Places API and is subject to the
-[Google Maps Platform Terms](https://cloud.google.com/maps-platform/terms). LeadMap uses
+[Google Maps Platform Terms](https://cloud.google.com/maps-platform/terms). Business Lead uses
 the official API — it does not scrape google.com/maps, which would violate those terms.
 
 ## Contributing
@@ -118,9 +131,9 @@ Issues and pull requests are welcome.
 
 ```bash
 pip install -e . pyflakes
-pyflakes leadmap tools                        # the check CI runs
-python -m leadmap --help                      # the CLI still builds
-python -m leadmap.validate.gazetteer "Austin, TX"
+pyflakes businesslead tools                        # the check CI runs
+python -m businesslead --help                      # the CLI still builds
+python -m businesslead.validate.gazetteer "Austin, TX, USA"
 ```
 
 House style, such as it is: modules stay single-purpose, comments explain *why* rather

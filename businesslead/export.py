@@ -12,8 +12,9 @@ from typing import TYPE_CHECKING, Iterable
 
 import pandas as pd
 
-from .constants import APP_TITLE
+from .constants import APP_TITLE, FILE_FORMATS, OUTPUT_DIR_NAME
 from .errors import PlacesError
+from .paths import env
 from .ui.report import short_path
 
 if TYPE_CHECKING:                       # only for the annotation below
@@ -32,6 +33,7 @@ COLUMN_WEIGHTS = {
     "business_status": 1.4, "opened": 1.0, "opening_hours": 4.6, "open_now": 0.9,
     "google_maps_url": 2.4, "reviews_url": 2.4, "directions_url": 2.4,
     "summary": 2.8, "place_id": 2.2, "search_query": 2.2, "searched_name": 1.5,
+    "extracted_on": 1.2,
 }
 HEADINGS = {
     "primary_type": "Type", "all_types": "All types", "international_phone": "Intl phone",
@@ -41,12 +43,13 @@ HEADINGS = {
     "directions_url": "Directions URL", "place_id": "Place ID",
     "search_query": "Query", "searched_name": "Searched name", "state_code": "ST",
     "postal_code": "PIN", "price_level": "Price", "price_range": "Price range",
+    "extracted_on": "Extracted",
 }
 
 
 # What a printed lead sheet is actually for: who they are, how to reach them,
 # where they are, and how well regarded. The other columns are all still in the
-# csv / xlsx / json — a PDF that carries 33 of them is 4pt type nobody reads.
+# csv / xlsx / json — a PDF that carries 34 of them is 4pt type nobody reads.
 PDF_COLUMNS = [
     "name", "primary_type", "phone", "website",
     "street", "area", "city", "state", "postal_code",
@@ -144,43 +147,118 @@ def write_pdf(df: pd.DataFrame, path: Path, title: str = "",
     document.build([heading, Spacer(1, 3 * mm), table])
 
 
-FORMATS = {"csv": ".csv", "excel": ".xlsx", "xlsx": ".xlsx", "xls": ".xlsx",
-           "spreadsheet": ".xlsx", "sheet": ".xlsx", "workbook": ".xlsx",
-           "pdf": ".pdf", "print": ".pdf", "json": ".json"}
+FORMATS = FILE_FORMATS          # name → extension, from constants.py
 READABLE = (".csv", ".xlsx", ".xls", ".json")
 
 
 def output_root() -> Path:
-    """Where bare filenames land. LEADMAP_OUTPUT_DIR moves it."""
-    return Path(os.environ.get("LEADMAP_OUTPUT_DIR", "output")).expanduser()
+    """Where bare filenames land. BUSINESSLEAD_OUTPUT_DIR moves it."""
+    return Path(env("OUTPUT_DIR", OUTPUT_DIR_NAME)).expanduser()
 
 
 def output_path_for(settings: "Settings", today: dt.date | None = None) -> Path:
     """Where a run will write.
 
-    A bare name is filed under output/<date>/ so a week of searches doesn't
-    silt up the working directory. A name with a directory in it — leads.csv in
-    a folder, ~/Desktop/leads.pdf, /tmp/x.json — is left exactly where you put it.
+    A bare name is filed straight into the output folder — one file per search,
+    named after it, added to every time that search is run again. A name with a
+    directory in it — leads.csv in a folder, ~/Desktop/leads.pdf, /tmp/x.json —
+    is left exactly where you put it.
+
+    `today` is accepted and ignored: results used to be filed under a folder per
+    day, which split one search's findings across as many folders as the days
+    you happened to run it on. Callers still pass it.
     """
     path = Path(settings.output).expanduser()
+    if not path.name:                    # asked before the filename question
+        path = Path(settings.default_filename())
     if not path.suffix:
         path = path.with_suffix(".csv")
+    if path.suffix.lower() == ".xls":    # pandas dropped the ancient .xls writer
+        path = path.with_suffix(".xlsx")
     if path.parent == Path("."):
-        day = (today or dt.date.today()).isoformat()
-        path = output_root() / day / path.name
+        path = output_root() / path.name
     return path
 
 
+def unique_path(path: Path) -> Path:
+    """The same name until it would overwrite: leads.csv → leads-2.csv → …
+
+    A results file is a delivery, so nothing may replace one. Searches that can
+    be added to are added to instead — see `fold_into_existing`; this is for the
+    ones that can't, a PDF or a file that won't read back.
+    """
+    if not path.exists():
+        return path
+    for counter in range(2, 1000):
+        candidate = path.with_name(f"{path.stem}-{counter}{path.suffix}")
+        if not candidate.exists():
+            return candidate
+    return path.with_name(f"{path.stem}-{dt.datetime.now():%H%M%S}{path.suffix}")
+
+
 def read_dataframe(path: Path) -> pd.DataFrame:
-    """Read a results file back — the CSV keeps its BOM, so say so."""
+    """Read a results file back — the CSV keeps its BOM, so say so.
+
+    The CSV is read as text and only the truly numeric columns are converted
+    back: type inference would strip the leading zero off a postal code and
+    turn a phone number into a float, and those corrupted values would then be
+    what --convert hands to a client.
+    """
     suffix = path.suffix.lower()
     if suffix in (".xlsx", ".xls"):
-        return pd.read_excel(path)
+        try:
+            return pd.read_excel(path)
+        except ImportError as exc:
+            raise PlacesError(f"reading {suffix} needs an extra package ({exc}) — "
+                              "save it as .xlsx or .csv instead") from exc
     if suffix == ".json":
         return pd.read_json(path)
     if suffix == ".csv":
-        return pd.read_csv(path, encoding="utf-8-sig")
+        df = pd.read_csv(path, encoding="utf-8-sig", dtype=str, keep_default_na=False)
+        for column in ("latitude", "longitude", "rating", "reviews_count"):
+            if column in df.columns:
+                try:
+                    df[column] = pd.to_numeric(df[column].where(df[column] != ""))
+                except (TypeError, ValueError):
+                    pass                       # someone else's file: leave it text
+        return df
     raise PlacesError(f"I can read .csv, .xlsx and .json — not {suffix or 'a file with no extension'}")
+
+
+def fold_into_existing(df: pd.DataFrame, path: Path) -> tuple[pd.DataFrame, Path, int]:
+    """Add this run's rows to the file that search already has.
+
+    One search, one file: run the same location and category again next week and
+    what it finds joins what is there, each row dated by `extracted_on`. Returns
+    what to write, where to write it, and how many rows were already in the file.
+
+    Rows already on disk keep their order and their dates — a sheet someone is
+    working down must not reshuffle under them — and this run's go underneath. A
+    place in both stays as the older row: that is when it was really delivered.
+
+    No failure here may cost a file. If what's on disk can't be read back — a
+    PDF, someone else's spreadsheet, one a crash left half written — it is left
+    exactly as it is and this run goes to a name of its own instead.
+    """
+    if not path.exists():
+        return df, path, 0
+    if path.suffix.lower() not in READABLE:
+        return df, unique_path(path), 0
+    try:
+        existing = read_dataframe(path)
+    except (PlacesError, OSError, ValueError):
+        return df, unique_path(path), 0
+    if existing.empty:
+        return df, path, 0
+
+    # Column-name union, so a sheet someone added a column of their own to keeps
+    # it, and an older file written before `extracted_on` existed simply leaves
+    # that cell empty for its rows rather than claiming a date it never had.
+    combined = pd.concat([existing, df], ignore_index=True)
+    if "place_id" in combined.columns:
+        ids = combined["place_id"].astype(str).str.strip()
+        combined = combined[~(ids.duplicated() & (ids != ""))]
+    return combined.reset_index(drop=True), path, len(existing)
 
 
 def convert_file(source: Path, formats: Iterable[str], title: str = "",
@@ -199,22 +277,19 @@ def convert_file(source: Path, formats: Iterable[str], title: str = "",
         target = source.with_suffix(suffix)
         if target == source:
             continue                       # already have this one
-        write_dataframe(df, target, title or source.stem.replace("_", " "),
-                        pdf_all=pdf_all)
+        try:
+            write_dataframe(df, target, title or source.stem.replace("_", " "),
+                            pdf_all=pdf_all)
+        except OSError as exc:
+            raise PlacesError(f"couldn't write {short_path(target)} — is it open "
+                              f"in another program? ({exc})") from exc
         written.append(target)
     return written
 
 
-def write_dataframe(df: pd.DataFrame, path: Path, title: str = "",
-                    pdf_all: bool = False) -> str:
-    """Write CSV, Excel, PDF or JSON based on the file extension.
-
-    csv, xlsx and json always carry every column. Only the PDF is a selection,
-    and only because a page has edges — `pdf_all` overrides that.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    suffix = path.suffix.lower()
-    if suffix in (".xlsx", ".xls"):
+def _write_one(df: pd.DataFrame, path: Path, suffix: str, title: str,
+               pdf_all: bool) -> str:
+    if suffix == ".xlsx":
         df.to_excel(path, index=False, sheet_name="businesses")
         return "xlsx"
     if suffix == ".pdf":
@@ -225,3 +300,35 @@ def write_dataframe(df: pd.DataFrame, path: Path, title: str = "",
         return "json"
     df.to_csv(path, index=False, encoding="utf-8-sig")   # BOM so Excel opens it cleanly
     return "csv"
+
+
+def write_dataframe(df: pd.DataFrame, path: Path, title: str = "",
+                    pdf_all: bool = False) -> str:
+    """Write CSV, Excel, PDF or JSON based on the file extension.
+
+    csv, xlsx and json always carry every column. Only the PDF is a selection,
+    and only because a page has edges — `pdf_all` overrides that.
+
+    The file is built beside its destination and moved onto it, never written
+    over in place. A results file now holds every run of that search rather than
+    only the last, so a writer that dies half way — a full disk, a killed
+    process — must leave the previous one whole instead of truncated.
+    """
+    suffix = path.suffix.lower()
+    if suffix == ".xls":               # pandas has no .xls writer any more
+        path, suffix = path.with_suffix(".xlsx"), ".xlsx"
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Beside the target, so the move onto it is a rename within one filesystem,
+    # and hidden + pid-tagged so a stray one is obvious and two runs can't pick
+    # the same scratch name.
+    temporary = path.with_name(f".{path.stem}.writing-{os.getpid()}{path.suffix}")
+    try:
+        fmt = _write_one(df, temporary, suffix, title, pdf_all)
+        temporary.replace(path)        # Windows: raises if the file is open in Excel
+        return fmt
+    finally:
+        try:
+            temporary.unlink()         # only still here if something above failed
+        except OSError:
+            pass

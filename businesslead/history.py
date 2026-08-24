@@ -1,7 +1,7 @@
 """
 A line per finished search, so the tool can tell you what you've already run.
 
-Kept beside the usage ledger (~/.local/state/leadmap/sessions.jsonl) as JSON
+Kept beside the usage ledger (~/.local/state/businesslead/sessions.jsonl) as JSON
 lines: append-only, trivially greppable, and harmless to delete. It records what
 was searched and what came back — never the API key.
 """
@@ -30,6 +30,12 @@ def record(**entry: Any) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        # ~300 bytes a run: only once the file has clearly outgrown KEEP is it
+        # worth reading back and rewriting to the last KEEP lines.
+        if path.stat().st_size > 512_000:
+            lines = path.read_text(encoding="utf-8").splitlines()
+            if len(lines) > KEEP:
+                path.write_text("\n".join(lines[-KEEP:]) + "\n", encoding="utf-8")
     except OSError:
         pass
 
@@ -49,6 +55,30 @@ def recent(limit: int = 10) -> list[dict]:
         if len(out) >= limit:
             break
     return out
+
+
+def last_for(path) -> Optional[dict]:
+    """The most recent search that wrote to this file, or None.
+
+    What a results file was searched with is worth recovering: name the file
+    again and the questions can pick up where it left off instead of being
+    retyped. Paths are compared resolved, since the history holds whatever the
+    run was given — "Business Lead/x.csv" one time, an absolute path the next.
+    """
+    try:
+        wanted = Path(path).expanduser().resolve()
+    except (OSError, ValueError):
+        return None
+    for entry in recent(KEEP):
+        stored = entry.get("file")
+        if not stored:
+            continue
+        try:
+            if Path(stored).expanduser().resolve() == wanted:
+                return entry
+        except (OSError, ValueError):
+            continue
+    return None
 
 
 def when(entry: dict) -> str:

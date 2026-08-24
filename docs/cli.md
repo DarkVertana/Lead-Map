@@ -4,7 +4,7 @@ Every option below works in one-shot mode. Passing any of `--location`, `--name`
 `--category` or `--output` skips the guided session automatically.
 
 ```bash
-leadmap -l "Nashik, India" -c barber -o barber_nashik.csv
+businesslead -l "Nashik, India" -c barber -o barber_nashik.csv
 ```
 
 Prefer `./run.sh` if you'd rather not think about the virtualenv — it takes the same
@@ -16,7 +16,7 @@ flags and forwards them straight through.
 
 | Flag | Default | What it does |
 |---|---|---|
-| `--location`, `-l` | — | Area to search, e.g. "Austin, TX" or "560001, Bangalore". |
+| `--location`, `-l` | — | Area to search, e.g. "Austin, TX, USA" or "560001, Bangalore, India". |
 | `--name`, `-n` | — | Optional business name, e.g. "Starbucks". |
 | `--category`, `-c` | — | Business category, e.g. "coffee shop", "dentist". |
 | `--type` | — | Restrict to a Places type id, e.g. restaurant, dentist. |
@@ -27,9 +27,11 @@ flags and forwards them straight through.
 | Flag | Default | What it does |
 |---|---|---|
 | `--radius` | — | Search radius in metres (default: the geocoded area; max 50000). |
-| `--grid` | `1` | Split the area into GRID x GRID sub-searches to exceed the 60-result cap. |
-| `--max_tiles` | `25` | Cap the automatic sweep at this many searches of the area. |
+| `--max_tiles` | — | Cap the sweep at this many searches (default: as many as today's free calls allow). |
 | `--max_results` | — | Stop after this many unique businesses. |
+| `--include-seen` | `False` | Write businesses earlier runs delivered (default: only what's new). |
+| `--forget-seen` | `False` | Forget delivered businesses and part-searched areas, and exit. |
+| `--resweep` | `False` | Search the whole area again instead of carrying on where the last run stopped. |
 
 ### Filtering
 
@@ -60,10 +62,11 @@ flags and forwards them straight through.
 
 | Flag | Default | What it does |
 |---|---|---|
-| `--daily_cap` | — | Calls allowed today (default: this month's free calls ÷ days left). |
-| `--monthly_cap` | — | Free calls a month (default: Google's allowance for our field mask). |
+| `--daily_cap` | — | Calls allowed today (default: this month's free calls ÷ days left). `BUSINESSLEAD_DAILY_CAP` in `.env` sets it permanently. |
+| `--monthly_cap` | — | Free calls a month (default: Google's allowance for our field mask). `BUSINESSLEAD_MONTHLY_CAP` in `.env` sets it permanently. |
 | `--usage` | `False` | Show what's left of the free tier and exit. |
 | `--sessions` | `False` | List the searches already run, and exit. |
+| `--locations` | `False` | Show the countries, states and cities you've added by hand, creating the file if there isn't one, and exit. |
 | `--reset_quota` | `False` | Forget today's recorded usage (development only). |
 
 ### Files
@@ -79,7 +82,7 @@ flags and forwards them straight through.
 
 | Flag | Default | What it does |
 |---|---|---|
-| `--chat/--no-chat` | — | Ask for location, category and name one question at a time. Default: on when you run with no search options. |
+| `--chat/--no-chat` | — | Ask for the file, location, category and name one question at a time. Default: on when you run with no search options. |
 | `--verbose`, `-v` | `False` | Log every tile of the sweep instead of one progress bar. |
 | `--quiet`, `-q` | `False` | Suppress all output. |
 | `--no_color` | `False` | Disable colour. |
@@ -89,7 +92,7 @@ flags and forwards them straight through.
 | Code | Meaning |
 |---|---|
 | `0` | The search ran. A file was written, or the search legitimately found nothing. |
-| `1` | It refused before spending: no API key, a rejected location or category, an unwritable format, or no free calls left. |
+| `1` | It refused before spending: no API key, a rejected location or category, an unwritable format, no free calls left, or the area has already been swept to the end — or it searched and every match had already been delivered, so there was no unique data to write. |
 | `130` | You interrupted it (`ctrl+c` twice, or `/quit`). Partial results are still written. |
 
 ## Recipes
@@ -97,16 +100,17 @@ flags and forwards them straight through.
 **A whole city, exhaustively**
 
 ```bash
-leadmap -l "Pune, India" -c "dentist" -o dentists.xlsx --max-tiles 40
+businesslead -l "Pune, India" -c "dentist" -o dentists.xlsx
 ```
 
-`--max-tiles` is the ceiling on how hard it digs. 25 is the default; 40 buys deeper
-coverage of a dense city at up to 120 API calls.
+Nothing caps the sweep but today's free calls: it keeps subdividing dense ground until
+the area stops giving or the day's share is gone. `--max-tiles 8` puts a ceiling back on
+when you'd rather spend less than the day allows.
 
 **Every branch of one chain**
 
 ```bash
-leadmap -l "Bengaluru, India" -n "Apollo Pharmacy" -o apollo.csv --name-match
+businesslead -l "Bengaluru, India" -n "Apollo Pharmacy" -o apollo.csv --name-match
 ```
 
 `--name-match` keeps only results whose name really contains what you asked for, which
@@ -115,7 +119,7 @@ drops the loosely related places Google likes to include.
 **Only leads worth calling**
 
 ```bash
-leadmap -l "Austin, TX" -c "coffee shop" -o cafes.csv \
+businesslead -l "Austin, TX, USA" -c "coffee shop" -o cafes.csv \
         --min-rating 4.0 --with-website-only --operational-only
 ```
 
@@ -126,18 +130,18 @@ results come back.
 
 ```bash
 for city in Nashik Pune Nagpur Aurangabad; do
-  leadmap -l "$city, India" -c "gym" -o "gyms_${city}.csv" --max-tiles 10 || break
+  businesslead -l "$city, India" -c "gym" -o "gyms_${city}.csv" --max-tiles 10 || break
 done
 ```
 
-The `|| break` matters: when the daily free share runs out, LeadMap exits `1` rather
+The `|| break` matters: when the daily free share runs out, Business Lead exits `1` rather
 than spending, and the loop stops instead of hammering a wall.
 
 **Nightly, from cron**
 
 ```cron
-0 3 * * *  cd ~/projects/leadmap && ./run.sh -l "Nashik, India" -c "new restaurant" \
-             -o "restaurants.csv" --max-tiles 8 --quiet >> ~/leadmap.log 2>&1
+0 3 * * *  cd ~/projects/businesslead && ./run.sh -l "Nashik, India" -c "new restaurant" \
+             -o "restaurants.csv" --max-tiles 8 --quiet >> ~/businesslead.log 2>&1
 ```
 
 `--quiet` silences everything but errors. The dated output folder keeps each night's
@@ -146,8 +150,8 @@ file separate, so nothing is overwritten.
 **Map coverage cheaply, then enrich**
 
 ```bash
-leadmap --plan pro -l "Nashik, India" -c gym -o gyms_survey.csv --max-tiles 40
-leadmap -l "Nashik, India" -n "Gold's Gym" -o golds.csv        # full plan, phone + website
+businesslead --plan pro -l "Nashik, India" -c gym -o gyms_survey.csv --max-tiles 40
+businesslead -l "Nashik, India" -n "Gold's Gym" -o golds.csv        # full plan, phone + website
 ```
 
 `--plan pro` bills against a separate 5,000-a-month allowance instead of the 1,000 one,
@@ -157,7 +161,7 @@ where* before spending the expensive allowance on the shortlist.
 **Convert what you already have**
 
 ```bash
-leadmap --convert output/2026-08-24/barber_nashik.csv --to pdf,excel
+businesslead --convert Business Lead/barber_nashik.csv --to pdf,excel
 ```
 
 No search, no API call, no quota. See [Output](output.md#changing-format-later).
