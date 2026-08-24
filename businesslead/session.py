@@ -8,9 +8,9 @@ again, leaving the answer behind as a line of output.
 
 The session asks one question at a time, in this order:
 
-    Location  →  Category  →  Name  →  Output file
+    File  →  Location  →  Category  →  Name
 
-then hands the finished Settings to ``leadmap.run``, which renders the
+then hands the finished Settings to ``businesslead.run``, which renders the
 search itself. Entry point: ``run_session(settings)``.
 """
 
@@ -37,16 +37,15 @@ from prompt_toolkit.layout.processors import (AfterInput, BeforeInput,
 from prompt_toolkit.styles import Style
 from rich.text import Text
 
-from . import export, history, quota, search
+from . import delivered, export, frontier, history, quota, search
 from .config import Settings
 from .constants import (APP_TITLE, ENV_KEYS, PLAN_NOTES, VERSION, dropped_by,
-                        plan_name, sku_for_plan)
-from .errors import PlacesError
+                        plan_name, sku_for_plan, suffix_for)
+from .errors import PlacesError, RetryableError
 from .ui.banner import banner
 from .ui.report import mask_key, progress_bar, short_path
 from .ui.theme import BRANCH, BULLET, console
 from .validate import gazetteer, place_types
-from .validate.gazetteer import Match
 
 console = console
 
@@ -282,7 +281,7 @@ def choose(rows: list[tuple[str, str]], *, current: int = 0,
 
 
 # ---------------------------------------------------------------------------
-# Output helpers — the same vocabulary leadmap.run uses
+# Output helpers — the same vocabulary businesslead.run uses
 # ---------------------------------------------------------------------------
 
 def step(title: str, mark: str = BULLET, style: str = "brand") -> None:
@@ -333,14 +332,101 @@ class Question:
     empty: str = "skipped"
     check: Optional[Callable[[str, "Settings"], gazetteer.Verdict]] = None
     insist_flag: str = ""        # Settings flag to clear when you answer twice
+    # Runs once the answer is on Settings. May fill in what the answer implies
+    # — naming a file the tool has written before brings that search back — and
+    # returns the muted lines to print under the answer.
+    on_answer: Optional[Callable[[object, "Settings"], list[str]]] = None
+    # True when answering this has settled everything after it: the loop jumps
+    # to the last question rather than walking you through filled-in ones.
+    jump: Optional[Callable[["Settings"], bool]] = None
+
+
+def _as_filename(answer: str, settings: Settings) -> str:
+    """What was typed, turned into a filename we can actually write.
+
+    A bare name gets the extension PLACES_FORMAT asked for, so "mumbai" becomes
+    mumbai.csv and nobody has to remember the format they set months ago. A name
+    with a directory in it is left alone, the way -o is.
+    """
+    text = answer.strip().strip('"').strip("'")
+    if not text:
+        return ""
+    path = Path(text).expanduser()
+    if not path.suffix:
+        path = path.with_suffix(suffix_for(settings.output_format))
+    return str(path)
+
+
+def _resume(settings: Settings, path: Path) -> list[str]:
+    """Bring back the search this file was last written by.
+
+    Naming a file you already have says something about the search as well as
+    the destination — it is that file's search you mean to add to. So the three
+    questions after this one arrive already filled in, and pressing enter
+    through them runs the same search again into the same file. Anything you
+    have already given — answered before /back, or set in .env — is left alone;
+    this only fills what is blank.
+    """
+    previous = history.last_for(path)
+    if not previous:
+        return []
+    taken = []
+    for key in ("location", "category", "name"):
+        if not getattr(settings, key, "") and previous.get(key):
+            setattr(settings, key, previous[key])
+            taken.append(key)
+    if not taken:
+        return []
+    settings.resumed = True
+    return [f"last searched for {history.describe(previous)} on "
+            f"{history.when(previous)} — taking that again; /back to change any of it"]
+
+
+def _file_chosen(value: object, settings: Settings) -> list[str]:
+    """Where it will land, what is in it already, and what it was searched with.
+
+    This is the whole point of asking: pointing a Mumbai search and a Bombay
+    search at one file only helps if you can see, as you answer, that the file
+    is the one that already has your Mumbai rows in it.
+    """
+    settings.resumed = False           # this answer decides it, not the last one
+    if not value:
+        return []
+    path = export.output_path_for(settings)
+    where = short_path(path)
+    if path.suffix.lower() not in export.READABLE:
+        return [f"{where} — a {path.suffix.lstrip('.') or 'file'} like this can't be "
+                f"added to, so each search writes its own"]
+    if not path.exists():
+        return [f"{where} — new file"]
+    try:
+        rows = len(export.read_dataframe(path))
+        found = f"{where} — {rows:,} row{'' if rows == 1 else 's'} already, this search adds to them"
+    except (PlacesError, OSError, ValueError):
+        found = f"{where} — already there; this search adds to it"
+    return [found, *_resume(settings, path)]
 
 
 QUESTIONS: list[Question] = [
     Question(
+        key="output",
+        title="File",
+        hint="Which file should these results go in? Enter to name it after the search.",
+        placeholder="mumbai_dentists.csv   ·   enter to name it after the search",
+        default=lambda s: s.output,
+        parse=_as_filename,
+        on_answer=_file_chosen,
+        # Only when what came back can actually run: location is required, and
+        # so is one of category / name. Short of that there is still something
+        # to ask, so the questions are walked through as usual.
+        jump=lambda s: bool(s.resumed and s.location and (s.category or s.name)),
+        empty="named after the search",
+    ),
+    Question(
         key="location",
         title="Location",
-        hint="Where should I search? City, area, postcode or full address.",
-        placeholder="Austin, TX   ·   560001, Bangalore",
+        hint="Where should I search? Name the country — the rest is optional.",
+        placeholder="Austin, TX, USA   ·   560001, Bangalore, India",
         required=lambda s: True,
         default=lambda s: s.location,
         check=lambda answer, s: gazetteer.verify(answer, region=s.region),
@@ -366,47 +452,7 @@ QUESTIONS: list[Question] = [
         default=lambda s: s.name,
         empty="any name",
     ),
-    Question(
-        key="output",
-        title="Output",
-        hint="csv, excel or pdf — or a filename if you want to choose it.",
-        placeholder="csv   ·   excel   ·   pdf   ·   leads.xlsx",
-        required=lambda s: True,
-        default=lambda s: s.output or "csv",
-        parse=lambda answer, s: output_file(answer, s),
-        check=lambda answer, s: check_output(answer),
-    ),
 ]
-
-
-# What you can type at the Output question, and what it writes.
-FORMATS = {
-    "csv": ".csv", "excel": ".xlsx", "xlsx": ".xlsx", "xls": ".xlsx",
-    "spreadsheet": ".xlsx", "sheet": ".xlsx", "workbook": ".xlsx",
-    "pdf": ".pdf", "print": ".pdf", "json": ".json",
-}
-SUFFIXES = {".csv", ".xlsx", ".xls", ".pdf", ".json"}
-
-
-def output_file(answer: str, settings: "Settings") -> str:
-    """'excel' → coffee_shop_pune.xlsx; 'leads.pdf' → leads.pdf."""
-    word = answer.strip().lower()
-    if word in FORMATS:
-        return str(Path(settings.default_filename()).with_suffix(FORMATS[word]))
-    path = Path(answer.strip())
-    return str(path if path.suffix else path.with_suffix(".csv"))
-
-
-def check_output(answer: str) -> gazetteer.Verdict:
-    verdict = gazetteer.Verdict(location=answer)
-    word = answer.strip().lower()
-    suffix = Path(answer.strip()).suffix.lower()
-    if word in FORMATS or not suffix or suffix in SUFFIXES:
-        verdict.matches.append(Match("output", answer.strip()))
-        return verdict
-    verdict.problems.append(f"I can't write {suffix} — csv, excel, pdf or json")
-    verdict.suggestions = ["csv", "excel", "pdf"]
-    return verdict
 
 
 @dataclass
@@ -464,10 +510,11 @@ def _cmd_daily_cap(args: str, settings: Settings) -> None:
     if not args.strip():
         step("Today's cap")
         field("allowance", f"{status.allowance_today:,} calls"
-                           + (" (set by --daily-cap)" if settings.daily_cap else
+                           + (f" (set by {settings.daily_cap_source or '--daily-cap'})"
+                              if settings.daily_cap is not None else
                               " — this month's remainder ÷ days left"))
         field("used", f"{status.used_today:,}  ·  {status.left_today:,} left")
-        field("month", f"{status.left_month:,} of {status.sku.free_per_month:,} left")
+        field("month", f"{status.left_month:,} of {status.monthly_free:,} left")
         detail("/daily-cap N sets the whole allowance · /borrow N just adds to it")
         console.print()
         return
@@ -484,6 +531,7 @@ def _cmd_daily_cap(args: str, settings: Settings) -> None:
         return
 
     settings.daily_cap = wanted
+    settings.daily_cap_source = "/daily-cap"
     fresh = quota.Quota(daily_cap=wanted, monthly_cap=settings.monthly_cap)
     now = fresh.status(sku_for_plan(settings.plan))
     step(f"Today's cap is now {wanted:,}", mark="✓", style="ok")
@@ -511,18 +559,21 @@ def _cmd_borrow(args: str, settings: Settings) -> None:
         return
     if extra > status.left_month:
         detail(f"only {status.left_month:,} left this month — that's the ceiling, "
-               "and it isn't one LeadMap can lift", style="warn")
+               "and it isn't one Business Lead can lift", style="warn")
         extra = status.left_month
         if not extra:
             console.print()
             return
 
-    settings.daily_cap = status.used_today + extra
+    # "N more" means on top of what today already allows — not a replacement
+    # for it. (max() covers a day already spent past its allowance.)
+    settings.daily_cap = max(status.allowance_today, status.used_today) + extra
+    settings.daily_cap_source = "/borrow"
     now = quota.Quota(daily_cap=settings.daily_cap,
                       monthly_cap=settings.monthly_cap).status(sku_for_plan(settings.plan))
     step(f"Borrowed {extra:,} calls for today", mark="✓", style="ok")
     field("left today", f"{now.left_today:,}")
-    field("left this month", f"{now.left_month:,} of {now.sku.free_per_month:,}")
+    field("left this month", f"{now.left_month:,} of {now.monthly_free:,}")
     detail("taken from the rest of the month — the monthly free tier still holds")
     console.print()
 
@@ -552,7 +603,7 @@ def _apply_plan(settings: Settings, wanted: str, ledger: quota.Quota) -> None:
         field("free tier", "unlimited — this SKU is not metered")
     else:
         previous = "unlimited" if was.free_per_month == 0 else f"{was.free_per_month:,}"
-        field("free tier", f"{sku.free_per_month:,} a month (was {previous})  ·  "
+        field("free tier", f"{status.monthly_free:,} a month (was {previous})  ·  "
                            f"{status.left_month:,} left  ·  "
                            f"{status.left_today:,} today")
     given_up = dropped_by(wanted)
@@ -560,7 +611,7 @@ def _apply_plan(settings: Settings, wanted: str, ledger: quota.Quota) -> None:
         field("giving up", ", ".join(given_up[:8])
                            + (f" … {len(given_up) - 8} more" if len(given_up) > 8 else ""),
               style="warn")
-        detail("those columns come back empty — the file still has all 33")
+        detail("those columns come back empty — the file still has all 34")
     detail(f"each SKU has its own allowance — {wanted} usage is counted separately "
            "from the rest")
     console.print()
@@ -625,7 +676,7 @@ def _cmd_reset_quota(args: str, settings: Settings) -> None:
         field(key, f"{count:,} calls forgotten", style="warn")
     if not cleared:
         field("today", "nothing had been recorded", style="muted")
-    detail("this clears LeadMap's bookkeeping only — Google has still been called, "
+    detail("this clears Business Lead's bookkeeping only — Google has still been called, "
            "and still counts every one of them", style="warn")
     detail("for development. The real limit lives in the Cloud console.")
     console.print()
@@ -686,13 +737,26 @@ def _cmd_settings(args: str, settings: Settings) -> None:
     for label, value in (("location", settings.location), ("category", settings.category),
                          ("name", settings.name), ("output", settings.output)):
         field(label, value or "—", style="value" if value else "muted")
-    field("coverage", f"{settings.grid}×{settings.grid} tiles" if settings.grid > 1
-          else f"automatic, up to {settings.max_tiles} tiles", style="muted")
     field("api key", f"{mask_key(settings.api_key)} · from "
                      f"{settings.api_key_source or 'environment'}", style="muted")
+    field("repeats", "kept in (--include-seen)" if settings.include_seen else
+                     f"held back · {len(delivered.Delivered()):,} delivered so far",
+          style="muted")
     field("checks", ("location " + ("on" if settings.verify_location else "off")
                      + " · category " + ("on" if settings.verify_category else "off")),
           style="muted")
+    caps = []
+    if settings.daily_cap is not None:
+        caps.append(f"today {settings.daily_cap:,} "
+                    f"({settings.daily_cap_source or '--daily-cap'})")
+    if settings.monthly_cap is not None:
+        caps.append(f"month {settings.monthly_cap:,} "
+                    f"({settings.monthly_cap_source or '--monthly-cap'})")
+    if caps:
+        field("caps", " · ".join(caps), style="muted")
+    if added := gazetteer.extras():          # PLACES_EXTRA_LOCATIONS, if it's set
+        field("extra", ", ".join(name for name, _ in added.values())
+                       + " — treated as real places", style="muted")
     console.print()
 
 
@@ -703,9 +767,46 @@ def _cmd_formats(args: str, settings: Settings) -> None:
     field("json", "every column · one object per business", style="muted")
     field("pdf", "the essential twelve, landscape — --pdf-all for the rest",
           style="muted")
-    field("folder", short_path(export.output_root()) + "/<date>/", style="muted")
-    detail("a finished file can be re-written any time: "
-           "leadmap --convert FILE --to pdf")
+    field("folder", short_path(export.output_root()) + "/", style="muted")
+    field("writing", f"{settings.output_format}  ·  set by PLACES_FORMAT in "
+                     f"{short_path(settings.env_path) if settings.env_path else '.env'}",
+          style="muted")
+    detail("the file is named after the search — nothing to answer. Run that "
+           "search again and what it finds is added to the same file, dated in "
+           "the extracted_on column. Re-write one any time: businesslead "
+           "--convert FILE --to pdf")
+    console.print()
+
+
+def _cmd_seen(args: str, settings: Settings) -> None:
+    """Every business handed over so far — no search ever repeats one."""
+    import datetime as dt
+
+    store = delivered.Delivered()
+    sweeps = frontier.Frontier()
+    if args.strip().lower() in ("forget", "clear", "reset", "again"):
+        dropped, restarted = store.forget(), sweeps.forget()
+        step("Forgotten")
+        detail(f"{dropped:,} delivered businesses and {restarted:,} part-searched "
+               "areas dropped — searches start from nothing again", style="warn")
+        console.print()
+        return
+    step(f"Already delivered · {len(store):,} businesses")
+    if not len(store):
+        detail("nothing yet — the first search keeps everything it finds")
+        console.print()
+        return
+    for day, count in store.by_day(7):
+        try:
+            label = dt.date.fromisoformat(day).strftime("%d %b")
+        except ValueError:
+            label = day
+        field(label, f"{count:,} businesses", style="muted")
+    if sweeps.waiting():
+        field("queued", f"{sweeps.waiting():,} areas across {len(sweeps):,} searches "
+                        "— the next run carries on there", style="muted")
+    detail(f"kept in {short_path(delivered.default_path())}  ·  /seen forget "
+           "starts over")
     console.print()
 
 
@@ -715,6 +816,13 @@ def _cmd_where(args: str, settings: Settings) -> None:
     field("usage ledger", short_path(quota.default_ledger_path()),
           style="muted", width=12)
     field("history", short_path(history.history_path()), style="muted")
+    field("delivered", short_path(delivered.default_path()), style="muted")
+    field("sweeps", short_path(frontier.default_path()), style="muted")
+    field("place data", short_path(gazetteer.source()), style="muted")
+    added = gazetteer.custom()
+    field("your places", short_path(gazetteer.locations_path())
+                         + ("" if added.exists else "  (not made yet)"),
+          style="muted")
     field("env file", short_path(settings.env_path) if settings.env_path else "—",
           style="muted")
     console.print()
@@ -759,6 +867,8 @@ COMMANDS: list[Command] = [
     Command(("daily-cap", "limit"), "[N]", "set today's whole allowance",
             _cmd_daily_cap),
     Command(("sessions", "history"), "", "searches you've already run", _cmd_sessions),
+    Command(("seen", "delivered"), "[forget]",
+            "businesses already handed over — never sent twice", _cmd_seen),
     Command(("settings", "config"), "", "the answers and options in play", _cmd_settings),
     Command(("formats", "output"), "", "what each file format carries", _cmd_formats),
     Command(("where", "paths"), "", "where files and records are kept", _cmd_where),
@@ -789,6 +899,7 @@ def handle_command(text: str, settings: Settings) -> Optional[str]:
 def collect(settings: Settings) -> bool:
     """Ask every question in order. False if the user backed all the way out."""
     index = 0
+    settings.resumed = False
     insisted: dict[str, str] = {}      # answers the check rejected once already
     while index < len(QUESTIONS):
         question = QUESTIONS[index]
@@ -799,7 +910,10 @@ def collect(settings: Settings) -> bool:
         while True:
             default = question.default(settings)
             hint = f"{index + 1}/{len(QUESTIONS)}   "
-            hint += "enter to accept" if default else "enter to submit"
+            if index == len(QUESTIONS) - 1:       # the last answer starts the search
+                hint += "enter runs the search"
+            else:
+                hint += "enter to accept" if default else "enter to submit"
             if index:
                 hint += "   /back to change the last answer"
             hint += "   ctrl+c twice to quit"
@@ -846,14 +960,28 @@ def collect(settings: Settings) -> bool:
 
             value = question.parse(answer, settings) if question.parse else answer
             setattr(settings, question.key, value)
+            if question.on_answer:
+                remarks += [(f"· {line}", "muted")
+                            for line in question.on_answer(value, settings)]
             answered(question.show(value) if question.show and value else str(value or ""),
                      empty=question.empty, blank=not remarks)
             for text, style in remarks:
                 detail(text, style=style)
             if remarks:
                 console.print()
-            index += 1
+            index = (len(QUESTIONS) - 1
+                     if question.jump and question.jump(settings) else index + 1)
             break
+    # The File question is optional. Answer it and that file is the one this
+    # search — and the next, and the one after — is added to; skip it and the
+    # file is named after the search, which is what happened before there was a
+    # question at all. Either way it lands in Business Lead/ in the format
+    # PLACES_FORMAT chose.
+    if settings.output:
+        settings.output_source = "asked"
+    else:
+        settings.output = settings.default_filename()
+        settings.output_source = ""
     return True
 
 
@@ -874,42 +1002,16 @@ def free_tier_panel(ledger: quota.Quota, settings: Settings) -> None:
     """The three-line free-tier readout, at startup and on /quota."""
     free = ledger.status(sku_for_plan(settings.plan))
     step(f"Free tier · {free.sku.label}")
-    field("this month", f"{free.used_month:,} of {free.sku.free_per_month:,} used  ·  "
-                        f"{free.left_month:,} left  ·  resets "
-                        f"{quota.human_date(ledger.next_month())}")
+    month_line = (f"{free.used_month:,} of {free.monthly_free:,} used  ·  "
+                  f"{free.left_month:,} left  ·  resets "
+                  f"{quota.human_date(ledger.next_month())}")
+    if settings.monthly_cap is not None:
+        month_line += f"  ·  capped by {settings.monthly_cap_source or '--monthly-cap'}"
+    field("this month", month_line)
     field("today", f"{free.used_today:,} of {free.allowance_today:,} used  ·  "
                    f"{free.left_today:,} left  "
                    f"{progress_bar(free.used_today, free.allowance_today, 10)}")
     field("by day", day_strip(ledger, free.sku), style="muted")
-
-
-def plan(settings: Settings) -> None:
-    step("Ready when you are")
-    field("location", settings.location)
-    field("category", settings.category or "—",
-          style="value" if settings.category else "muted")
-    field("name", settings.name or "—",
-          style="value" if settings.name else "muted")
-    if settings.grid > 1:                      # only set by --grid or PLACES_GRID
-        field("coverage", f"{settings.grid}×{settings.grid} tiles")
-    else:
-        field("coverage", "everything in the area", style="value")
-    field("output", short_path(export.output_path_for(settings)), style="path")
-    left = quota.Quota(daily_cap=settings.daily_cap,
-                       monthly_cap=settings.monthly_cap).status(sku_for_plan(settings.plan))
-    field("free tier", f"{left.left_today:,} calls left today  ·  "
-                       f"{left.sku.label}", style="muted")
-    console.print()
-
-
-def confirm(settings: Settings) -> bool:
-    answer = read_line(key="__confirm__", placeholder="yes",
-                       hint="enter to run   ·   n to change an answer   ·   ctrl+c twice to quit")
-    if answer.lower() in ("n", "no", "back", "/back", "change"):
-        answered("let's change something", empty="")
-        return False
-    answered("running the search", empty="")
-    return True
 
 
 def another_format(settings: Settings) -> None:
@@ -957,16 +1059,47 @@ def again() -> bool:
     return yes
 
 
+def _carry_output(settings: Settings) -> str:
+    """The file to offer next time, as it was typed rather than as resolved.
+
+    search.run rewrites Settings.output to the full path it actually wrote, so
+    carrying that verbatim would put "Business Lead/mumbai_dentists.csv" in a box
+    the answer to which was "mumbai_dentists". A file sitting directly in the
+    output folder goes back to its bare name; one anywhere else keeps its path.
+    """
+    if not settings.output_source:
+        return ""                       # named after its search: the next names its own
+    path = Path(settings.output)
+    try:
+        if path.parent == export.output_root():
+            return path.name
+    except (OSError, ValueError):
+        pass
+    return settings.output
+
+
 def _reset(settings: Settings) -> Settings:
     """A new search that keeps the credentials and the global options."""
     return Settings(
         api_key=settings.api_key, api_key_source=settings.api_key_source,
-        env_path=settings.env_path, radius=settings.radius, grid=settings.grid,
-        max_results=settings.max_results, included_type=settings.included_type,
+        env_path=settings.env_path, output_format=settings.output_format,
+        # A file you named stays named: the next search offers it as the default,
+        # so a Mumbai run and a Bombay run land together without retyping it. One
+        # named after its own search doesn't carry — the next gets its own name.
+        output=_carry_output(settings),
+        output_source=settings.output_source,
+        radius=settings.radius,
+        max_results=settings.max_results, max_tiles=settings.max_tiles,
+        included_type=settings.included_type,
         language=settings.language, region=settings.region,
         min_rating=settings.min_rating, open_now=settings.open_now,
         name_match=settings.name_match, with_website_only=settings.with_website_only,
-        operational_only=settings.operational_only,
+        operational_only=settings.operational_only, include_seen=settings.include_seen,
+        resweep=settings.resweep,
+        plan=settings.plan, plan_source=settings.plan_source,
+        daily_cap=settings.daily_cap, daily_cap_source=settings.daily_cap_source,
+        monthly_cap=settings.monthly_cap,
+        monthly_cap_source=settings.monthly_cap_source,
     )
 
 
@@ -1015,7 +1148,7 @@ def ensure_quota(settings: Settings) -> bool:
 
     step("Out of free calls for today", mark="✗", style="bad")
     if free.left_month <= 0:
-        detail(f"the {free.sku.free_per_month:,} free calls for {ledger.month_name()} "
+        detail(f"the {free.monthly_free:,} free calls for {ledger.month_name()} "
                f"are gone — they come back on "
                f"{quota.human_date(ledger.next_month())}")
     else:
@@ -1028,7 +1161,7 @@ def ensure_quota(settings: Settings) -> bool:
 
 
 def run_session(settings: Settings) -> int:
-    """Guided run: ask, confirm, search, offer another. Returns an exit code."""
+    """Guided run: ask, search, offer another. Returns an exit code."""
     console.print(banner())
     console.print()
 
@@ -1047,24 +1180,14 @@ def run_session(settings: Settings) -> int:
     free_tier_panel(ledger, settings)
     console.print()
 
-    step("Ready")
-    field("api key", f"{mask_key(settings.api_key)} · from "
-                     f"{settings.api_key_source or 'environment'}", style="muted")
-    field("asking", "location, category, name — then a filename", style="muted")
-    field("commands", "/help lists them · /category /quota /sessions /version",
-          style="muted")
-    console.print()
-
     code = 0
     try:
         while True:
             if not ensure_quota(settings):        # talk first, search when able
                 return 1
-            while True:
-                collect(settings)
-                plan(settings)
-                if confirm(settings):
-                    break
+            collect(settings)
+            # No plan block and nothing to confirm: the last answer runs the
+            # search, and search.run opens with what it is about to do.
             code = search.run(settings)
             console.print()
             if code == 0:
@@ -1081,5 +1204,9 @@ def run_session(settings: Settings) -> int:
         return 130
     except PlacesError as exc:
         console.print(Text(f"✗ {exc}", style="bad"))
+        return 1
+    except RetryableError as exc:
+        console.print(Text(f"✗ the network (or Google) kept failing: {exc} — "
+                           "nothing was lost, search again any time", style="bad"))
         return 1
     return code

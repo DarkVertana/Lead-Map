@@ -1,4 +1,4 @@
-# LeadMap <small>2.0.0</small>
+# Business Lead <small>2.0.0</small>
 
 > Business leads from Google Places — name, phone, website and a properly split address,
 > straight to csv, excel, pdf or json.
@@ -9,5 +9,5 @@
 - **Terminal-first.** One question at a time, live progress, slash commands
 
 [Get started](setup.md)
-[Read the docs](#leadmap)
-[GitHub](https://github.com/DarkVertana/Lead-Map)
+[Read the docs](#business-lead)
+[GitHub](https://github.com/DarkVertana/Business-Lead)

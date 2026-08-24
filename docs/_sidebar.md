@@ -1,5 +1,5 @@
 - **Getting started**
-  - [What LeadMap is](/)
+  - [What Business Lead is](/)
   - [Setup](setup.md)
 
 - **Using it**
@@ -16,4 +16,4 @@
 - **Under the hood**
   - [Architecture](architecture.md)
 
-- [![GitHub](https://img.shields.io/badge/GitHub-Lead--Map-e08c48?logo=github)](https://github.com/DarkVertana/Lead-Map)
+- [![GitHub](https://img.shields.io/badge/GitHub-Business--Lead-e08c48?logo=github)](https://github.com/DarkVertana/Business-Lead)

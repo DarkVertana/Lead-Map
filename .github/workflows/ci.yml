@@ -35,20 +35,20 @@ jobs:
           pip install pyflakes
 
       - name: Lint
-        run: pyflakes leadmap tools
+        run: pyflakes businesslead tools
 
       - name: Import and CLI
         run: |
-          python -c "import leadmap; print(leadmap.APP_TITLE, leadmap.VERSION)"
-          python -m leadmap --version
-          python -m leadmap --help > /dev/null
+          python -c "import businesslead; print(businesslead.APP_TITLE, businesslead.VERSION)"
+          python -m businesslead --version
+          python -m businesslead --help > /dev/null
 
       # These need no API key: the datasets ship with the package.
       - name: Offline checks
         run: |
-          python -m leadmap.validate.gazetteer "Austin, TX" "560001, Bangalore"
-          python -m leadmap.validate.place_types "coffee shop" "chemist"
-          python -m leadmap.validate.gazetteer --stats
+          python -m businesslead.validate.gazetteer "Austin, TX, USA" "560001, Bangalore, India"
+          python -m businesslead.validate.place_types "coffee shop" "chemist"
+          python -m businesslead.validate.gazetteer --stats
 
       - name: Where it keeps things
-        run: python -c "from leadmap import paths; print(paths.state_dir()); print(paths.cache_dir())"
+        run: python -c "from businesslead import paths; print(paths.state_dir()); print(paths.cache_dir())"

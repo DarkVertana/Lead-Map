@@ -1,7 +1,7 @@
 @echo off
-REM LeadMap on Windows (cmd.exe). Same job as run.sh.
+REM Business Lead on Windows (cmd.exe). Same job as run.sh.
 REM   run.cmd
-REM   run.cmd -l "Austin, TX" -c "coffee shop" -o cafes.csv
+REM   run.cmd -l "Austin, TX, USA" -c "coffee shop" -o cafes.csv
 
 setlocal
 cd /d "%~dp0"
@@ -13,12 +13,23 @@ set PYTHONIOENCODING=utf-8
 if not exist ".venv\Scripts\python.exe" (
     echo Creating virtualenv...
     py -3 -m venv .venv || python -m venv .venv
-    if errorlevel 1 (
-        echo No Python found. Install Python 3.10+ from python.org or the Microsoft Store.
-        exit /b 1
-    )
+)
+
+REM checked by result: the Microsoft Store alias answers to "python" but
+REM installs nothing, and a half-made venv is no venv at all.
+if not exist ".venv\Scripts\python.exe" (
+    echo No working Python found. Install Python 3.10+ from python.org or the
+    echo Microsoft Store, then run this again.
+    pause
+    exit /b 1
 )
 
 ".venv\Scripts\python.exe" -m pip install --quiet --disable-pip-version-check -r requirements.txt
-".venv\Scripts\python.exe" -m leadmap %*
+if errorlevel 1 (
+    echo Installing the requirements failed - are you online? Fix the error
+    echo above and run this again.
+    pause
+    exit /b 1
+)
+".venv\Scripts\python.exe" -m businesslead %*
 exit /b %ERRORLEVEL%

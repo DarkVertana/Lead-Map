@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Regenerates leadmap/validate/data/postal_codes.py from GeoNames. Run it when you
+Regenerates businesslead/validate/data/postal_codes.py from GeoNames. Run it when you
 want fresher codes:
 
     .venv/bin/python tools/build_geodata.py
@@ -27,7 +27,8 @@ from pathlib import Path
 import requests
 
 SOURCE = "https://download.geonames.org/export/zip/allCountries.zip"
-TARGET = Path(__file__).resolve().parent.parent / "leadmap" / "validate" / "data" / "postal_codes.py"
+TARGET = (Path(__file__).resolve().parent.parent
+          / "businesslead" / "validate" / "data" / "postal_codes.py")
 SHARED_MAX = 61                      # keeps the marker inside printable ASCII
 
 

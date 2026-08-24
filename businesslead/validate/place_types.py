@@ -18,9 +18,9 @@ are scanned for a type inside them, so "best artisan bakery" matches bakery.
 The category still goes to Google as free text — this only catches typos before
 the search runs, and always lets you insist.
 
-    python -m leadmap.validate.place_types "coffee shop" "chemist" "dentst"
-    python -m leadmap.validate.place_types --list "Health and Wellness"
-    python -m leadmap.validate.place_types --stats
+    python -m businesslead.validate.place_types "coffee shop" "chemist" "dentst"
+    python -m businesslead.validate.place_types --list "Health and Wellness"
+    python -m businesslead.validate.place_types --stats
 """
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
 # Staying inside the free tier
 
 Google retired the $200 monthly credit in March 2025. Every SKU now has its own monthly
-allowance of free calls, and the call after it is billed. LeadMap is built so that call
+allowance of free calls, and the call after it is billed. Business Lead is built so that call
 never happens by accident.
 
 ## The allowances
@@ -20,7 +20,7 @@ on 2026-08-23:
 
 ## What your field mask costs
 
-A request bills at **the highest tier any field in its mask belongs to**. LeadMap asks for
+A request bills at **the highest tier any field in its mask belongs to**. Business Lead asks for
 phone, website, rating and review count (Enterprise) plus the editorial summary
 (Atmosphere), so it bills at the last row: **1,000 free searches a month**.
 
@@ -71,7 +71,7 @@ a tile. So 33 requests is about eleven dense tiles.
 
 ## The ledger
 
-Every call is written to `~/.local/state/leadmap/usage.json`:
+Every call is written to `~/.local/state/businesslead/usage.json`:
 
 ```json
 {
@@ -82,7 +82,7 @@ Every call is written to `~/.local/state/leadmap/usage.json`:
 
 - Saved in a `finally`, so `ctrl+c` still records what was spent.
 - Retries and 429/5xx responses are refunded — Google doesn't bill those.
-- `LEADMAP_USAGE_FILE` moves it, which is how the test suite avoids touching real numbers.
+- `BUSINESSLEAD_USAGE_FILE` moves it, which is how the test suite avoids touching real numbers.
 
 ## When it runs out
 
@@ -108,14 +108,14 @@ There is no flag that spends money.
 | To ignore today's counter entirely | `/reset-quota` — **development only** |
 
 `/borrow` is honest: it takes from the month's remainder and can't exceed it.
-`/reset-quota` is not — it clears LeadMap's bookkeeping while Google's meter keeps
+`/reset-quota` is not — it clears Business Lead's bookkeeping while Google's meter keeps
 running.
 
-## The one guarantee LeadMap can't give you
+## The one guarantee Business Lead can't give you
 
 The ledger only counts calls made **through this machine**. Use the same key from another
 laptop, a script, or a colleague's checkout, and the real total is higher than anything
-LeadMap knows about.
+Business Lead knows about.
 
 The guarantee lives in the Google Cloud console:
 

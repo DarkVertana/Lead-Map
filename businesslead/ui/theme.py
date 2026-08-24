@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import questionary
 from rich import spinner as rich_spinner
 from rich.console import Console
 from rich.theme import Theme
@@ -33,9 +32,19 @@ BULLET = "⏺"
 BRANCH = "⎿"
 
 console = Console(theme=THEME, highlight=False)
-QUESTION_STYLE = questionary.Style([
-    ("qmark", "fg:#e08c48 bold"),
-    ("question", "bold"),
-    ("answer", "fg:#5fd7af"),
-    ("instruction", "fg:#808080"),
-])
+
+
+def __getattr__(name: str):
+    # questionary drags in all of prompt_toolkit; only the one-shot prompts
+    # need it, so the style is built the first time somebody asks for it.
+    if name == "QUESTION_STYLE":
+        import questionary
+        style = questionary.Style([
+            ("qmark", "fg:#e08c48 bold"),
+            ("question", "bold"),
+            ("answer", "fg:#5fd7af"),
+            ("instruction", "fg:#808080"),
+        ])
+        globals()["QUESTION_STYLE"] = style
+        return style
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

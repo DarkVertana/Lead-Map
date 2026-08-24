@@ -8,18 +8,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-import questionary
 import typer
 from dotenv import dotenv_values, find_dotenv, load_dotenv
 
-from .constants import DEFAULT_PLAN, DEFAULT_TILE_BUDGET, ENV_KEYS
+from . import quota
+from .constants import DEFAULT_FORMAT, DEFAULT_PLAN, ENV_KEYS, plan_name, suffix_for
 from .errors import PlacesError
 from .ui.report import short_path
-from .ui.theme import QUESTION_STYLE, console
+from .ui.theme import console
 
 
 def ask(label: str, default: str = "", required: bool = False) -> str:
     """questionary prompt; Ctrl-C / Ctrl-D exits cleanly."""
+    import questionary                     # lazy: --version shouldn't pay for it
+    from .ui.theme import QUESTION_STYLE
     answer = questionary.text(
         label, default=default, qmark="›", style=QUESTION_STYLE,
         instruction="(Enter to skip) " if not required and not default else None,
@@ -36,15 +38,22 @@ class Settings:
     name: str = ""
     category: str = ""
     output: str = ""
+    output_source: str = ""               # set when a file was asked for rather than
+                                          # named after the search — see session.collect
+    resumed: bool = False                 # the File answer brought a previous search
+                                          # back, so there is nothing left to ask
+    output_format: str = DEFAULT_FORMAT   # PLACES_FORMAT in .env; never asked for
     api_key: str = ""
     api_key_source: str = ""
     env_path: Optional[str] = None
     radius: Optional[float] = None
-    grid: int = 1
     max_results: Optional[int] = None
-    max_tiles: int = DEFAULT_TILE_BUDGET
+    max_tiles: Optional[int] = None       # None: dig until today's calls run out
     daily_cap: Optional[int] = None
     monthly_cap: Optional[int] = None
+    daily_cap_source: str = ""            # '--daily-cap', 'BUSINESSLEAD_DAILY_CAP', '/borrow' …
+    monthly_cap_source: str = ""
+    plan_source: str = ""                 # '--plan' when the flag set it
     included_type: Optional[str] = None
     language: Optional[str] = None
     region: Optional[str] = None
@@ -56,6 +65,8 @@ class Settings:
     verify_category: bool = True
     with_website_only: bool = False
     operational_only: bool = False
+    include_seen: bool = False            # write businesses earlier runs delivered
+    resweep: bool = False                 # start this search's sweep over
     json_out: Optional[str] = None
     quiet: bool = False
     verbose: bool = False
@@ -66,9 +77,10 @@ class Settings:
         return " ".join(part for part in [self.name, self.category] if part)
 
     def default_filename(self) -> str:
+        """The file a search writes: named after it, in the format .env asked for."""
         seed = "_".join(p for p in [self.name, self.category, self.location] if p)
         slug = "_".join("".join(c if c.isalnum() else " " for c in seed.lower()).split())
-        return f"{slug[:60] or 'places'}.csv"
+        return f"{slug[:60] or 'places'}{suffix_for(self.output_format)}"
 
 
 def load_environment(env_file: str | None) -> tuple[Optional[str], set[str]]:
@@ -111,34 +123,59 @@ def apply_env_defaults(settings: Settings, from_file: set[str]) -> Settings:
     settings.category = settings.category or env_default("PLACES_CATEGORY") or ""
     settings.name = settings.name or env_default("PLACES_NAME") or ""
     settings.included_type = settings.included_type or env_default("PLACES_TYPE")
+    if settings.output_format == DEFAULT_FORMAT and (
+            raw := env_default("PLACES_FORMAT", "BUSINESSLEAD_FORMAT", "LEADMAP_FORMAT")):
+        settings.output_format = raw
     settings.language = settings.language or env_default("PLACES_LANGUAGE")
     settings.region = settings.region or env_default("PLACES_REGION")
     if settings.radius is None and (raw := env_default("PLACES_RADIUS")):
         try:
             settings.radius = float(raw)
         except ValueError:
-            pass
-    if settings.plan == DEFAULT_PLAN and (raw := env_default("LEADMAP_PLAN", "PLACES_PLAN")):
-        settings.plan = raw
-    if settings.grid == 1 and (raw := env_default("PLACES_GRID")):
+            # ignored, but never silently: a radius the user believes is set
+            # would otherwise quietly become the whole geocoded viewport.
+            console.print(f"  ! ignoring PLACES_RADIUS={raw!r} — not a number "
+                          "of metres", style="warn")
+
+    # The free-tier caps: flags first, then .env. Bad values fail loudly — a
+    # cap that silently doesn't apply is an overspend waiting to happen.
+    if settings.daily_cap is None:
+        value, source = quota.cap_from_env(quota.ENV_DAILY_CAP)
+        if value is not None:
+            settings.daily_cap, settings.daily_cap_source = value, source
+    if settings.monthly_cap is None:
+        value, source = quota.cap_from_env(quota.ENV_MONTHLY_CAP)
+        if value is not None:
+            settings.monthly_cap, settings.monthly_cap_source = value, source
+
+    # The plan, unless --plan already chose one. Validated here: a typo in
+    # .env must not decide what every search bills at.
+    if settings.plan_source != "--plan" and (
+            raw := env_default("BUSINESSLEAD_PLAN", "PLACES_PLAN", "LEADMAP_PLAN")):
         try:
-            settings.grid = int(raw)
-        except ValueError:
-            pass
+            settings.plan = plan_name(raw)
+        except ValueError as exc:
+            raise PlacesError(f"{exc} (from BUSINESSLEAD_PLAN / PLACES_PLAN in the "
+                              "environment)") from None
     return settings
 
 
 def collect_inputs(settings: Settings) -> Settings:
-    """Prompt for whatever is still missing (name stays optional)."""
-    missing = [f for f in ("location", "output") if not getattr(settings, f)]
+    """Prompt for whatever is still missing (name stays optional).
+
+    The output file is never missing: it is named after the search, in the format
+    PLACES_FORMAT asks for, unless --output says otherwise.
+    """
+    missing = ["location"] if not settings.location else []
     if not settings.name and not settings.category:
         missing.append("name or category")
     if not missing:
+        settings.output = settings.output or settings.default_filename()
         return settings
 
     if not sys.stdin.isatty() or settings.quiet:
         raise PlacesError(
-            f"missing required input(s): {', '.join(missing)}. Use --location, --output "
+            f"missing required input(s): {', '.join(missing)}. Use --location "
             "and at least one of --name / --category (see --help)."
         )
 
@@ -150,7 +187,6 @@ def collect_inputs(settings: Settings) -> Settings:
         settings.name = ask("Business name")
     if not settings.category:
         settings.category = ask("Category", required=not settings.name)
-    if not settings.output:
-        settings.output = ask("Output CSV", default=settings.default_filename())
+    settings.output = settings.output or settings.default_filename()
     console.print()
     return settings

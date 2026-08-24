@@ -11,9 +11,13 @@ from __future__ import annotations
 from . import quota
 
 
-APP_TITLE = "LeadMap"
+APP_TITLE = "Business Lead"
 APP_TAGLINE = "Business leads from Google Places  ·  csv · excel · pdf · json"
 VERSION = "2.0.0"
+
+# The folder results land in, beside wherever you run from.
+# BUSINESSLEAD_OUTPUT_DIR moves it somewhere else entirely.
+OUTPUT_DIR_NAME = "Business Lead"
 
 PLACES_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
 GEOCODE_URL = "https://maps.googleapis.com/maps/api/geocode/json"
@@ -28,7 +32,17 @@ MAX_RADIUS_M = 50_000  # hard API maximum
 # so the same ground is searched again in four smaller circles.
 SATURATED = MAX_PAGES * PAGE_SIZE - 5
 MIN_TILE_RADIUS = 300.0     # below this, splitting stops finding anything new
-DEFAULT_TILE_BUDGET = 25    # tiles per search unless --max-tiles says otherwise
+# There is no tile budget: a sweep digs until the area stops giving or the day's
+# free calls are gone. --max-tiles puts a ceiling back on if you want one. The
+# ids-only SKU is unmetered, so nothing would ever stop it — that one gets a cap.
+UNMETERED_TILES = 200
+# Searches in a row that hand back nothing new before a sweep gives up. The
+# queue it hasn't reached is kept, so the next run starts there instead.
+DRY_TILES = 10
+# Searches in a row that fail outright before a sweep stops. A bad key or a
+# dead service fails on every tile the same way — draining the whole queue to
+# find that out would burn the frontier for nothing.
+ERROR_TILES = 5
 
 # Fields requested from the Places API. Trim this to lower your bill: contact and
 # atmosphere fields (phone, website, hours, rating) bill at a higher SKU than the
@@ -62,6 +76,26 @@ SEARCH_SKU = quota.sku_for_mask(FIELD_MASK)
 # less is the only way to a bigger free allowance. A plan is exactly that: the
 # tier to stop at. Everything above it is dropped from the mask, those columns
 # come back empty, and the monthly allowance changes to match.
+
+# What a format is called, and the extension it writes. PLACES_FORMAT in .env
+# picks the one every run uses — the session never asks for it.
+FILE_FORMATS = {
+    "csv": ".csv", "excel": ".xlsx", "xlsx": ".xlsx", "xls": ".xlsx",
+    "spreadsheet": ".xlsx", "sheet": ".xlsx", "workbook": ".xlsx",
+    "pdf": ".pdf", "print": ".pdf", "json": ".json",
+}
+DEFAULT_FORMAT = "csv"
+
+
+def suffix_for(fmt: str) -> str:
+    """'excel' → '.xlsx'. An extension is taken as it is; anything else is csv."""
+    word = (fmt or "").strip().lower()
+    if word in FILE_FORMATS:
+        return FILE_FORMATS[word]
+    if word.startswith(".") and word[1:] in FILE_FORMATS:
+        return FILE_FORMATS[word[1:]]
+    return FILE_FORMATS[DEFAULT_FORMAT]
+
 
 DEFAULT_PLAN = "atmosphere"
 
@@ -109,7 +143,10 @@ def sku_for_plan(plan: str) -> "quota.Sku":
     return quota.sku_for_tier(plan_name(plan))
 
 # The spreadsheet, in reading order: who they are, how to reach them, where they
-# are (broken up), then everything else Google knows.
+# are (broken up), then everything else Google knows, and last the three columns
+# about the search rather than the business. `extracted_on` is the day the row
+# was written: a file is added to by every later run of the same search, so it
+# is what tells one run's findings from the next.
 COLUMNS = [
     "name", "category", "primary_type", "all_types",
     "phone", "international_phone", "website",
@@ -118,5 +155,5 @@ COLUMNS = [
     "rating", "reviews_count", "price_level", "price_range", "business_status",
     "opened", "opening_hours", "open_now",
     "google_maps_url", "reviews_url", "directions_url",
-    "summary", "place_id", "search_query", "searched_name",
+    "summary", "place_id", "search_query", "searched_name", "extracted_on",
 ]
