@@ -57,10 +57,13 @@ deduplicated, sorted by review count.
 
 ```bash
 git clone https://github.com/DarkVertana/Lead-Map.git
-cd leadmap
+cd Lead-Map
 cp .env.example .env          # then put your Google API key in it
 ./run.sh                      # creates the venv, installs, starts the session
 ```
+
+On Windows, `.\run.ps1` (PowerShell) or `run.cmd` (cmd) do the same thing — see
+[Setup → On Windows](https://darkvertana.github.io/Lead-Map/#/setup?id=on-windows).
 
 One-shot instead:
 
@@ -681,7 +684,7 @@ leadmap/                  the package — python -m leadmap, or `leadmap` once i
 tools/build_geodata.py    rebuilds postal_codes.py from GeoNames
 output/<date>/            where results land
 pyproject.toml            metadata, dependencies, the `leadmap` command
-run.sh                    venv + deps + run, in one step
+run.sh · run.ps1 · run.cmd  venv + deps + run — bash, PowerShell, cmd
 ```
 
 Each module has its own CLI where that's useful:

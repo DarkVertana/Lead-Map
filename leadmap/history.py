@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-from .quota import state_dir
+from .paths import state_dir
 
 KEEP = 500          # lines; older ones are dropped when the file is rewritten
 

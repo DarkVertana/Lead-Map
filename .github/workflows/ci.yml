@@ -8,11 +8,17 @@ on:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         python: ["3.10", "3.11", "3.12", "3.13"]
+        exclude:
+          # one Windows job is enough to prove the paths and the console
+          - { os: windows-latest, python: "3.10" }
+          - { os: windows-latest, python: "3.11" }
+          - { os: windows-latest, python: "3.12" }
 
     steps:
       - uses: actions/checkout@v4
@@ -43,3 +49,6 @@ jobs:
           python -m leadmap.validate.gazetteer "Austin, TX" "560001, Bangalore"
           python -m leadmap.validate.place_types "coffee shop" "chemist"
           python -m leadmap.validate.gazetteer --stats
+
+      - name: Where it keeps things
+        run: python -c "from leadmap import paths; print(paths.state_dir()); print(paths.cache_dir())"

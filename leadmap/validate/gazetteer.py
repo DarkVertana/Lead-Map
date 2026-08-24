@@ -35,7 +35,6 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 CACHE_VERSION = 1
-CACHE_DIR = Path.home() / ".cache" / "leadmap"
 
 # Tokens shorter than this only count when they are an uppercase code (TX, IN):
 # without that rule "in" inside an address would quietly match India.
@@ -176,7 +175,8 @@ class Index:
 
     @staticmethod
     def _cache_path() -> Path:
-        return CACHE_DIR / f"gazetteer-v{CACHE_VERSION}.marshal"
+        from ..paths import cache_dir          # lazy: keeps this module standalone
+        return cache_dir() / f"gazetteer-v{CACHE_VERSION}.marshal"
 
     @classmethod
     def load(cls) -> "Index":

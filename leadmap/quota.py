@@ -40,6 +40,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from .paths import state_dir
+
 LEDGER_VERSION = 1
 KEEP_DAYS = 400
 
@@ -153,12 +155,6 @@ def cheaper_masks(field_mask: str) -> list[tuple[Sku, list[str]]]:
 # ---------------------------------------------------------------------------
 # The ledger
 # ---------------------------------------------------------------------------
-
-def state_dir() -> Path:
-    """Where LeadMap keeps what it remembers between runs."""
-    state = os.environ.get("XDG_STATE_HOME") or (Path.home() / ".local" / "state")
-    return Path(state).expanduser() / "leadmap"
-
 
 def default_ledger_path() -> Path:
     override = os.environ.get("LEADMAP_USAGE_FILE")

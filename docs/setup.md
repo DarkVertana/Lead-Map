@@ -92,6 +92,43 @@ Python 3.10 or newer. The heaviest dependencies are pandas (tables), reportlab (
 prompt-toolkit (the input box); the offline datasets ship inside the package, so nothing
 is downloaded at runtime.
 
+### On Windows
+
+`run.sh` is a bash script — it needs Git Bash or WSL. Windows has its own launchers
+instead, doing exactly the same thing:
+
+```powershell
+.\run.ps1                                        # PowerShell
+.\run.ps1 -l "Austin, TX" -c "coffee shop" -o cafes.csv
+```
+
+```bat
+run.cmd                                          :: cmd.exe, or double-click it
+run.cmd -l "Austin, TX" -c "coffee shop" -o cafes.csv
+```
+
+Or skip the launcher entirely — the package needs no script:
+
+```powershell
+py -3 -m venv .venv
+.venv\Scripts\activate
+pip install -e .
+leadmap
+```
+
+Three Windows notes:
+
+- **Use Windows Terminal** if you can. The interface draws with `⏺ ⎿ ▰ ✻` and rounded
+  box corners; Windows Terminal renders them and handles the input box properly. The old
+  `conhost` console works, but both launchers set the UTF-8 code page for it first.
+- **`.\run.ps1` may be blocked** by execution policy. Either run
+  `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once, or use `run.cmd`, which has
+  no such restriction.
+- **Files land in the same places**, addressed the Windows way:
+  `%LOCALAPPDATA%\leadmap\state\usage.json` for the ledger and search history,
+  `%LOCALAPPDATA%\leadmap\cache\` for the gazetteer index, and `output\<date>\` for
+  results.
+
 ## 4 · Check it works
 
 None of these spend an API call:
